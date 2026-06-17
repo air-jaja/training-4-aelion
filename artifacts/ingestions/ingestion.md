@@ -1,4 +1,4 @@
-### TP1
+### TP1 - Compute releves_incidents.csv
 0. Add the 'ipykernel' kernel
   ```
   python 
@@ -91,3 +91,8 @@ uv add matplotlib
              6. Create output directory for graphs
              7. Generate Graphics
            - Display graph.
+
+### TP2 -- Compute all csv files [releves_incidents.csv & telemetry.csv]
+0.  **Refactoring**
+    1.  Keep Anonymized data process
+    2.  Update Generate Graphics process
