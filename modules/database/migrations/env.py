@@ -52,7 +52,7 @@ db_name = os.getenv("DB_NAME", "indusense_db")
 
 # Construct the database URL
 db_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-print(f"\n⚠️ Debug: Database URL = {db_url}")  # Debug the URL
+print(f"\n⚠️  ~~ Debug: Database URL = {db_url} ~~\n")  # Debug the URL
 
 # Reconfigure the sqlalchemy.url option
 config.set_main_option("sqlalchemy.url", db_url)

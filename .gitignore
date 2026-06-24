@@ -13,3 +13,4 @@ wheels/
 *.png
 /artifacts/ingestions/incidents/**/*.csv
 /.vscode/*
+/artifacts/ingestions/telemetry/**/*.csv

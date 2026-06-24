@@ -1,4 +1,5 @@
 import os
+import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -13,34 +14,64 @@ os.environ["OUTPUT_DIR"] = os.getenv("OUTPUT_DIR", "./artifacts/outputs")
 os.environ["ANONYMIZE_COLUMNS"] = os.getenv("ANONYMIZE_COLUMNS", "operator_name|operator_badge")
 
 # ----------------------------
-# Execute modules
+# Define command-line arguments
+# ----------------------------
+parser = argparse.ArgumentParser(description="Data Processing Pipeline")
+parser.add_argument("--anonymize", action="store_true", help="Run anonymization module")
+parser.add_argument("--load-bronze", action="store_true", help="Load data into Bronze layer (PostgreSQL)")
+parser.add_argument("--analyze-incidents", action="store_true", help="Run incidents analysis")
+parser.add_argument("--analyze-anomalies", action="store_true", help="Run anomalies analysis")
+parser.add_argument("--analyze-telemetry", action="store_true", help="Run telemetry analysis")
+parser.add_argument("--all", action="store_true", help="Run all modules (default)")
+
+args = parser.parse_args()
+
+# If no arguments are provided, run all modules by default
+if not any(vars(args).values()):
+    args.all = True
+
+def run_module(module_name, module_function):
+    """Helper function to run a module and log its execution."""
+    print(f"\n🔹 {module_name}...")
+    try:
+        module_function()
+        print(f"✅ {module_name} completed successfully.")
+    except Exception as e:
+        print(f"❌ Error in {module_name}: {e}")
+        raise
+
+# ----------------------------
+# Execute modules based on arguments
 # ----------------------------
 if __name__ == "__main__":
     print("🚀 Starting data processing...")
 
     # 1. Anonymize data
-    print("\n🔹 Anonymizing data...")
-    from modules.anonymize_data import anonymize_data
-    anonymize_data()
+    if args.all or args.anonymize:
+        from modules.anonymize_data import anonymize_data
+        run_module("Anonymizing data", anonymize_data)
 
-    # 2. Load data into PostgreSQL database
-    print("\n🔹 Loading [Bronze] data into PostgreSQL database...")
-    from modules.database.database_loader import load_bronze_data 
-    load_bronze_data()
+    # 2. Load data into PostgreSQL database (Bronze layer)
+    if args.all or args.load_bronze:
+        from modules.anonymize_data import anonymize_data
+        run_module("Anonymizing data", anonymize_data)
+
+        from modules.database.database_loader import load_bronze_data
+        run_module("Loading [Bronze] data into PostgreSQL database", load_bronze_data)
 
     # 3. Analyze incidents
-    print("\n🔹 Analyzing incidents...")
-    from modules.analyze_incidents import analyze_incidents
-    analyze_incidents()
+    if args.all or args.analyze_incidents:
+        from modules.analyze_incidents import analyze_incidents
+        run_module("Analyzing incidents", analyze_incidents)
 
     # 4. Analyze anomalies in telemetry data
-    print("\n🔹 Analyzing anomalies in telemetry data...")
-    from modules.analyze_anomalies import analyze_anomalies
-    analyze_anomalies()
+    if args.all or args.analyze_anomalies:
+        from modules.analyze_anomalies import analyze_anomalies
+        run_module("Analyzing anomalies in telemetry data", analyze_anomalies)
 
     # 5. Analyze telemetry
-    print("\n🔹 Analyzing telemetry...")
-    from modules.analyze_telemetry import analyze_telemetry
-    analyze_telemetry()
+    if args.all or args.analyze_telemetry:
+        from modules.analyze_telemetry import analyze_telemetry
+        run_module("Analyzing telemetry", analyze_telemetry)
 
-    print("\n✅ All processes completed successfully.")
+    print("\n✅ All selected processes completed successfully.")

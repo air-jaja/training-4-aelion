@@ -15,7 +15,7 @@ def analyze_incidents():
     severity_column = "severity"
 
     # Get input directory from environment variable (set by anonymize_data.py)
-    input_dir = os.getenv("INPUT_DATA_DIR", original_input_data_dir)
+    input_dir = os.path.dirname(os.getenv("ANONYMIZED_FILE_PATH"))
 
     # Find all _anonymised.csv files in the input directory
     for root, dirs, files in os.walk(input_dir):

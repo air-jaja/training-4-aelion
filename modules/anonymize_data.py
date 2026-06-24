@@ -21,7 +21,7 @@ def anonymize_data():
 
     # Create output directory with timestamp
     date_time_output = datetime.now().strftime("%Y%m%d%H%M")
-    output_dir = os.path.join(output_base_dir, date_time_output)
+    output_dir = os.path.join(output_base_dir, "incidents", date_time_output)
     os.makedirs(output_dir, exist_ok=True)
 
     # Save the anonymized file
@@ -30,6 +30,6 @@ def anonymize_data():
 
     # Set the output file path as an environment variable for the next module
     os.environ["ANONYMIZED_FILE_PATH"] = output_file_path
-    os.environ["INPUT_DATA_DIR"] = os.path.dirname(output_file_path)  # Set the directory containing the anonymized file
 
     print(f"✅ Anonymized file saved at: {output_file_path}")
+    

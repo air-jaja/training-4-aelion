@@ -15,7 +15,7 @@ def analyze_anomalies():
     }
 
     # Get input directory from environment variable
-    input_dir = os.getenv("INPUT_DATA_DIR", "./artifacts/ingestions")
+    input_dir = os.getenv("INPUT_DATA_DIR", "./artifacts/ingestions/datas")
 
     # Find telemetry.csv file
     for root, dirs, files in os.walk(input_dir):
