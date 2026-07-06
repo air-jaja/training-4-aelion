@@ -1,9 +1,22 @@
+import sys
+import os
+
+# Add the project root to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Now use absolute imports
+from modules.database.models import Base
+
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+
+from dotenv import load_dotenv
+
+# from urllib.parse import quote
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -18,13 +31,31 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
+
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+# Replace placeholders in sqlalchemy.url with environment variables
+db_user = os.getenv("DB_USER", "indusense_user")
+db_password = os.getenv("DB_PASSWORD", "ThEPssW0rd")
+db_host = os.getenv("DB_HOST", "localhost")
+db_port = os.getenv("DB_PORT", "5432")
+db_name = os.getenv("DB_NAME", "indusense_db")
 
+# URL-encode the password and username
+#encoded_user = quote(db_user)
+#encoded_password = quote(db_password)
+
+
+# Construct the database URL
+db_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+print(f"\n⚠️  ~~ Debug: Database URL = {db_url} ~~\n")  # Debug the URL
+
+# Reconfigure the sqlalchemy.url option
+config.set_main_option("sqlalchemy.url", db_url)
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
