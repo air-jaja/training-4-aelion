@@ -287,6 +287,6 @@ def load_gold_datasets():
     load_gold_dataset()
 
     # Load the all-VARCHAR gold_dataset_csv table
-    load_gold_dataset_csv()
+    # load_gold_dataset_csv()
 
     logger.info("✅ Both 'gold_dataset' and 'gold_dataset_csv' tables loaded successfully!")
