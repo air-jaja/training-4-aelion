@@ -50,17 +50,27 @@ def load_gold_dataset():
 
     # --- 1. Read the CSV file ---
     try:
-        df = pd.read_csv(csv_file, sep="\t")  # Use tab separator as per the original code
-        logger.info(f"CSV file read successfully. Shape: {df.shape}")
+        # Try reading with comma separator first (most common)
+        df = pd.read_csv(csv_file, sep=",")
+        logger.info(f"CSV file read successfully with comma separator. Shape: {df.shape}")
     except Exception as e:
-        logger.error(f"Error reading CSV file: {e}")
-        raise
+        logger.warning(f"Failed to read CSV with comma separator: {e}")
+        try:
+            # Fallback to tab separator
+            df = pd.read_csv(csv_file, sep="\t")
+            logger.info(f"CSV file read successfully with tab separator. Shape: {df.shape}")
+        except Exception as e:
+            logger.error(f"Failed to read CSV with tab separator: {e}")
+            raise
+
+    # Debug: Print the first few columns to verify
+    logger.info(f"CSV columns: {list(df.columns[:5])}...")  # Print first 5 columns
 
     # --- 2. Clean the data ---
     # Replace empty strings with None to avoid SQL errors
     df.replace("", None, inplace=True)
 
-    # Convert date columns to datetime
+    # Convert date columns to datetime (if they exist)
     date_columns = ["window_start", "window_end"]
     for col in date_columns:
         if col in df.columns:
@@ -70,25 +80,60 @@ def load_gold_dataset():
             except Exception as e:
                 logger.warning(f"Error converting column '{col}' to datetime: {e}")
 
-    # --- 3. Filter columns to match GoldDataset model ---
+    # --- 3. Map CSV columns to GoldDataset model columns ---
     # Get the column names from the GoldDataset model (excluding 'id')
     gold_dataset_columns = [col.name for col in GoldDataset.__table__.columns if col.name != "id"]
-    logger.info(f"GoldDataset model columns: {gold_dataset_columns}")
+    logger.info(f"GoldDataset model columns: {gold_dataset_columns[:5]}...")  # Print first 5 model columns
+
+    # Check if CSV columns match model columns
+    csv_columns = list(df.columns)
+    
+    # If CSV has a single column with all names concatenated (common error with wrong separator)
+    if len(csv_columns) == 1:
+        # Try to split the single column name by comma
+        single_col_name = csv_columns[0]
+        if "," in single_col_name:
+            logger.warning(f"CSV appears to have a single column with concatenated names. Splitting by comma...")
+            # Split the column name and use as new column names
+            new_columns = [col.strip() for col in single_col_name.split(",")]
+            df.columns = new_columns
+            csv_columns = new_columns
+            logger.info(f"Split into {len(new_columns)} columns: {new_columns[:5]}...")
 
     # Check for missing or extra columns
-    csv_columns = set(df.columns)
     model_columns = set(gold_dataset_columns)
-    missing_columns = model_columns - csv_columns
-    extra_columns = csv_columns - model_columns
+    csv_columns_set = set(csv_columns)
+    missing_columns = model_columns - csv_columns_set
+    extra_columns = csv_columns_set - model_columns
 
     if missing_columns:
         logger.warning(f"Columns in GoldDataset model but not in CSV: {missing_columns}")
     if extra_columns:
         logger.warning(f"Columns in CSV but not in GoldDataset model: {extra_columns}")
 
+    # If there are missing columns, try to map CSV columns to model columns
+    # This handles cases where CSV column names are slightly different
+    if missing_columns or extra_columns:
+        logger.info("Attempting to map CSV columns to GoldDataset model...")
+        # Create a mapping from CSV column names to model column names
+        # This is a simple example - you may need to customize this based on your actual CSV
+        column_mapping = {
+            # Add any known mappings here, e.g.:
+            # "machine_id": "machine_id_std",
+            # "timestamp": "window_start",
+        }
+        # Apply mapping
+        df.rename(columns=column_mapping, inplace=True)
+        # Update CSV columns after mapping
+        csv_columns = list(df.columns)
+        csv_columns_set = set(csv_columns)
+        missing_columns = model_columns - csv_columns_set
+        extra_columns = csv_columns_set - model_columns
+
     # Keep only the columns that exist in the model
-    df_filtered = df[gold_dataset_columns].copy()
-    logger.info(f"Filtered DataFrame to {len(df_filtered.columns)} columns.")
+    available_columns = [col for col in gold_dataset_columns if col in csv_columns]
+    df_filtered = df[available_columns].copy()
+    logger.info(f"Filtered DataFrame to {len(available_columns)} columns: {available_columns[:5]}...")
 
     # --- 4. Create a connection to PostgreSQL and create tables ---
     engine = get_db_engine()
@@ -159,11 +204,30 @@ def load_gold_dataset_csv():
 
     # --- 1. Read the CSV file ---
     try:
-        df = pd.read_csv(csv_file, sep="\t")  # Use tab separator as per the original code
-        logger.info(f"CSV file read successfully. Shape: {df.shape}")
+        # Try reading with comma separator first
+        df = pd.read_csv(csv_file, sep=",")
+        logger.info(f"CSV file read successfully with comma separator. Shape: {df.shape}")
     except Exception as e:
-        logger.error(f"Error reading CSV file: {e}")
-        raise
+        logger.warning(f"Failed to read CSV with comma separator: {e}")
+        try:
+            # Fallback to tab separator
+            df = pd.read_csv(csv_file, sep="\t")
+            logger.info(f"CSV file read successfully with tab separator. Shape: {df.shape}")
+        except Exception as e:
+            logger.error(f"Failed to read CSV with tab separator: {e}")
+            raise
+
+    # Debug: Print the first few columns to verify
+    logger.info(f"CSV columns: {list(df.columns[:5])}...")
+
+    # Handle case where CSV has a single column with concatenated names
+    if len(df.columns) == 1:
+        single_col_name = df.columns[0]
+        if "," in single_col_name:
+            logger.warning(f"CSV appears to have a single column with concatenated names. Splitting by comma...")
+            new_columns = [col.strip() for col in single_col_name.split(",")]
+            df.columns = new_columns
+            logger.info(f"Split into {len(new_columns)} columns: {new_columns[:5]}...")
 
     # --- 2. Convert all columns to strings ---
     # Replace empty strings with None to avoid SQL errors
@@ -223,6 +287,6 @@ def load_gold_datasets():
     load_gold_dataset()
 
     # Load the all-VARCHAR gold_dataset_csv table
-    # load_gold_dataset_csv()
+    load_gold_dataset_csv()
 
     logger.info("✅ Both 'gold_dataset' and 'gold_dataset_csv' tables loaded successfully!")
