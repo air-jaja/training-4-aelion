@@ -70,7 +70,27 @@ def load_gold_dataset():
             except Exception as e:
                 logger.warning(f"Error converting column '{col}' to datetime: {e}")
 
-    # --- 3. Create a connection to PostgreSQL and create tables ---
+    # --- 3. Filter columns to match GoldDataset model ---
+    # Get the column names from the GoldDataset model (excluding 'id')
+    gold_dataset_columns = [col.name for col in GoldDataset.__table__.columns if col.name != "id"]
+    logger.info(f"GoldDataset model columns: {gold_dataset_columns}")
+
+    # Check for missing or extra columns
+    csv_columns = set(df.columns)
+    model_columns = set(gold_dataset_columns)
+    missing_columns = model_columns - csv_columns
+    extra_columns = csv_columns - model_columns
+
+    if missing_columns:
+        logger.warning(f"Columns in GoldDataset model but not in CSV: {missing_columns}")
+    if extra_columns:
+        logger.warning(f"Columns in CSV but not in GoldDataset model: {extra_columns}")
+
+    # Keep only the columns that exist in the model
+    df_filtered = df[gold_dataset_columns].copy()
+    logger.info(f"Filtered DataFrame to {len(df_filtered.columns)} columns.")
+
+    # --- 4. Create a connection to PostgreSQL and create tables ---
     engine = get_db_engine()
 
     # Create all tables defined in the models (including gold_dataset)
@@ -81,7 +101,7 @@ def load_gold_dataset():
         logger.error(f"Error creating database tables: {e}")
         raise
 
-    # --- 4. Drop and recreate the gold_dataset table to ensure clean state ---
+    # --- 5. Drop and recreate the gold_dataset table to ensure clean state ---
     try:
         with engine.connect() as conn:
             # Drop the table if it exists (to avoid conflicts with existing data)
@@ -96,13 +116,13 @@ def load_gold_dataset():
         logger.error(f"Error recreating 'gold_dataset' table: {e}")
         raise
 
-    # --- 5. Load data into PostgreSQL using SQLAlchemy ORM ---
+    # --- 6. Load data into PostgreSQL using SQLAlchemy ORM ---
     Session = sessionmaker(bind=engine)
     session = Session()
 
     try:
-        # Convert DataFrame to dictionary of records
-        records = df.to_dict(orient="records")
+        # Convert filtered DataFrame to dictionary of records
+        records = df_filtered.to_dict(orient="records")
 
         # Insert records into the gold_dataset table
         for record in records:
