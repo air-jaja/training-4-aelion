@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from sqlalchemy import create_engine, URL, text
 from sqlalchemy.orm import sessionmaker
-from .models import Base, IncidentBronze, TelemetryBronze, Machine, Maintenance
+from .models import Base, IncidentBronze, TelemetryBronze, Machine, Maintenance, GoldDataset
 from dotenv import load_dotenv
 import logging
 
@@ -44,6 +44,10 @@ def drop_tables():
         conn.execute(text("DROP TABLE IF EXISTS incidents_bronze CASCADE"))
         logger.info("Dropped 'incidents_bronze' table if it existed.")
         conn.execute(text("DROP TABLE IF EXISTS telemetry_bronze CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS gold_dataset CASCADE"))
+        logger.info("Dropped 'gold_dataset' table if it existed.")
+        conn.execute(text("DROP TABLE IF EXISTS gold_dataset_csv CASCADE"))
+        logger.info("Dropped 'gold_dataset_csv' table if it existed.")
         logger.info("Dropped 'telemetry_bronze' table if it existed.")
 
 def create_tables():

@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import logging
 from dotenv import load_dotenv
+from .database.models import Base, GoldDataset
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +33,7 @@ def get_db_engine():
 
 def load_gold_dataset():
     """
-    Load the gold_dataset from a CSV file into PostgreSQL with proper data types.
+    Load the gold_dataset from a CSV file into PostgreSQL using SQLAlchemy ORM.
     The CSV file is expected to be in the INPUT_DATA_DIR (default: ./artifacts/ingestions/datas).
     The table 'gold_dataset' will be created with typed columns (TIMESTAMP, FLOAT, INTEGER, BOOLEAN, VARCHAR).
     """
@@ -69,143 +70,54 @@ def load_gold_dataset():
             except Exception as e:
                 logger.warning(f"Error converting column '{col}' to datetime: {e}")
 
-    # --- 3. Create a connection to PostgreSQL ---
+    # --- 3. Create a connection to PostgreSQL and create tables ---
     engine = get_db_engine()
 
-    # --- 4. Create the 'gold_dataset' table (if it doesn't exist) ---
-    create_table_query = """
-    CREATE TABLE IF NOT EXISTS gold_dataset (
-        machine_id_std VARCHAR(50),
-        window_start TIMESTAMP,
-        temp_mean_1h FLOAT,
-        temp_max_1h FLOAT,
-        pressure_mean_1h FLOAT,
-        pressure_max_1h FLOAT,
-        voltage_mean_1h FLOAT,
-        voltage_max_1h FLOAT,
-        rotation_mean_1h FLOAT,
-        rotation_max_1h FLOAT,
-        pieces_produced_sum_1h INTEGER,
-        window_end TIMESTAMP,
-        temp_mean_6h FLOAT,
-        temp_max_6h FLOAT,
-        temp_std_6h FLOAT,
-        pressure_mean_6h FLOAT,
-        pressure_max_6h FLOAT,
-        pressure_std_6h FLOAT,
-        voltage_mean_6h FLOAT,
-        voltage_max_6h FLOAT,
-        voltage_std_6h FLOAT,
-        rotation_mean_6h FLOAT,
-        rotation_max_6h FLOAT,
-        rotation_std_6h FLOAT,
-        temp_mean_12h FLOAT,
-        temp_max_12h FLOAT,
-        temp_std_12h FLOAT,
-        pressure_mean_12h FLOAT,
-        pressure_max_12h FLOAT,
-        pressure_std_12h FLOAT,
-        voltage_mean_12h FLOAT,
-        voltage_max_12h FLOAT,
-        voltage_std_12h FLOAT,
-        rotation_mean_12h FLOAT,
-        rotation_max_12h FLOAT,
-        rotation_std_12h FLOAT,
-        temp_mean_24h FLOAT,
-        temp_max_24h FLOAT,
-        temp_std_24h FLOAT,
-        pressure_mean_24h FLOAT,
-        pressure_max_24h FLOAT,
-        pressure_std_24h FLOAT,
-        voltage_mean_24h FLOAT,
-        voltage_max_24h FLOAT,
-        voltage_std_24h FLOAT,
-        rotation_mean_24h FLOAT,
-        rotation_max_24h FLOAT,
-        rotation_std_24h FLOAT,
-        temp_trend_6h FLOAT,
-        pressure_trend_6h FLOAT,
-        voltage_trend_6h FLOAT,
-        rotation_trend_6h FLOAT,
-        temp_zscore_24h FLOAT,
-        temp_delta_1h FLOAT,
-        temp_delta_3h FLOAT,
-        pressure_delta_1h FLOAT,
-        pressure_delta_3h FLOAT,
-        rotation_delta_1h FLOAT,
-        rotation_delta_3h FLOAT,
-        voltage_delta_1h FLOAT,
-        voltage_delta_3h FLOAT,
-        temp_zscore_machine FLOAT,
-        pressure_zscore_machine FLOAT,
-        pieces_produced_sum_24h INTEGER,
-        capacity_utilization_pct FLOAT,
-        incident_count_1h INTEGER,
-        incident_max_severity_1h INTEGER,
-        incident_count_prev_24h INTEGER,
-        incident_max_severity_prev_24h INTEGER,
-        incident_count_prev_7d INTEGER,
-        hours_since_last_incident FLOAT,
-        type_surchauffe BOOLEAN,
-        type_baisse_pression BOOLEAN,
-        type_vibration BOOLEAN,
-        type_bruit_mecanique BOOLEAN,
-        type_surconsommation BOOLEAN,
-        type_blocage_mecanique BOOLEAN,
-        type_alarme_capteur BOOLEAN,
-        type_arret_urgence BOOLEAN,
-        type_defaut_qualite BOOLEAN,
-        type_surchauffe_count_prev_24h INTEGER,
-        type_baisse_pression_count_prev_24h INTEGER,
-        type_vibration_count_prev_24h INTEGER,
-        type_bruit_mecanique_count_prev_24h INTEGER,
-        type_surconsommation_count_prev_24h INTEGER,
-        type_blocage_mecanique_count_prev_24h INTEGER,
-        type_alarme_capteur_count_prev_24h INTEGER,
-        type_arret_urgence_count_prev_24h INTEGER,
-        type_defaut_qualite_count_prev_24h INTEGER,
-        days_since_last_maintenance FLOAT,
-        maintenance_count_prev_30d INTEGER,
-        future_incident_count_6h INTEGER,
-        label_failure_next_6h BOOLEAN,
-        future_incident_count_12h INTEGER,
-        label_failure_next_12h BOOLEAN,
-        future_incident_count_24h INTEGER,
-        label_failure_next_24h BOOLEAN,
-        future_incident_count_48h INTEGER,
-        label_failure_next_48h BOOLEAN,
-        split_set VARCHAR(50)
-    );
-    """
+    # Create all tables defined in the models (including gold_dataset)
+    try:
+        Base.metadata.create_all(engine)
+        logger.info("Database tables created/verified successfully.")
+    except Exception as e:
+        logger.error(f"Error creating database tables: {e}")
+        raise
 
+    # --- 4. Drop and recreate the gold_dataset table to ensure clean state ---
     try:
         with engine.connect() as conn:
-            # Drop the table if it exists (optional)
+            # Drop the table if it exists (to avoid conflicts with existing data)
             conn.execute(text("DROP TABLE IF EXISTS gold_dataset CASCADE;"))
             conn.commit()
             logger.info("Dropped 'gold_dataset' table if it existed.")
 
-            # Create the table
-            conn.execute(text(create_table_query))
-            conn.commit()
-            logger.info("Created 'gold_dataset' table successfully.")
+            # Recreate the table using SQLAlchemy ORM
+            Base.metadata.create_all(engine)
+            logger.info("Recreated 'gold_dataset' table successfully.")
     except Exception as e:
-        logger.error(f"Error creating 'gold_dataset' table: {e}")
+        logger.error(f"Error recreating 'gold_dataset' table: {e}")
         raise
 
-    # --- 5. Load data into PostgreSQL ---
+    # --- 5. Load data into PostgreSQL using SQLAlchemy ORM ---
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
     try:
-        df.to_sql(
-            name="gold_dataset",
-            con=engine,
-            if_exists="append",  # Append data without overwriting the table
-            index=False,
-            method="multi",  # Optimize bulk insertion
-        )
-        logger.info("Data loaded successfully into 'gold_dataset' table!")
+        # Convert DataFrame to dictionary of records
+        records = df.to_dict(orient="records")
+
+        # Insert records into the gold_dataset table
+        for record in records:
+            # Create a new GoldDataset instance
+            gold_record = GoldDataset(**record)
+            session.add(gold_record)
+
+        session.commit()
+        logger.info(f"✅ {len(records)} records loaded successfully into 'gold_dataset' table!")
     except Exception as e:
+        session.rollback()
         logger.error(f"Error loading data into 'gold_dataset': {e}")
         raise
+    finally:
+        session.close()
 
 
 def load_gold_dataset_csv():
@@ -274,7 +186,7 @@ def load_gold_dataset_csv():
             index=False,
             method="multi",  # Optimize bulk insertion
         )
-        logger.info("Data loaded successfully into 'gold_dataset_csv' table!")
+        logger.info("✅ Data loaded successfully into 'gold_dataset_csv' table!")
     except Exception as e:
         logger.error(f"Error loading data into 'gold_dataset_csv': {e}")
         raise
@@ -293,4 +205,4 @@ def load_gold_datasets():
     # Load the all-VARCHAR gold_dataset_csv table
     load_gold_dataset_csv()
 
-    logger.info("Both 'gold_dataset' and 'gold_dataset_csv' tables loaded successfully!")
+    logger.info("✅ Both 'gold_dataset' and 'gold_dataset_csv' tables loaded successfully!")
