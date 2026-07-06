@@ -23,7 +23,8 @@ parser.add_argument("--drop-tables", action="store_true", help="Drop existing ta
 parser.add_argument("--analyze-incidents", action="store_true", help="Run incidents analysis")
 parser.add_argument("--analyze-anomalies", action="store_true", help="Run anomalies analysis")
 parser.add_argument("--analyze-telemetry", action="store_true", help="Run telemetry analysis")
-parser.add_argument("--all", action="store_true", help="Run all modules in order: anonymize -> load-bronze -> analyze-incidents -> analyze-anomalies -> analyze-telemetry")
+parser.add_argument("--load-gold", action="store_true", help="Load gold_dataset and gold_dataset_csv tables")
+parser.add_argument("--all", action="store_true", help="Run all modules in order: anonymize -> load-bronze -> load-gold -> analyze-incidents -> analyze-anomalies -> analyze-telemetry")
 
 args = parser.parse_args()
 
@@ -88,17 +89,22 @@ if __name__ == "__main__":
         else:
             print("⚠️ Anonymization has already been completed in this run. Skipping.")
 
-    # 3. Analyze incidents
+    # 3. Load gold datasets (typed and CSV string tables)
+    if args.all or args.load_gold:
+        from modules.load_gold_dataset import load_gold_datasets
+        run_module("Loading [Gold] datasets into PostgreSQL database", load_gold_datasets)
+
+    # 4. Analyze incidents
     if args.all or args.analyze_incidents:
         from modules.analyze_incidents import analyze_incidents
         run_module("Analyzing incidents", analyze_incidents)
 
-    # 4. Analyze anomalies in telemetry data
+    # 5. Analyze anomalies in telemetry data
     if args.all or args.analyze_anomalies:
         from modules.analyze_anomalies import analyze_anomalies
         run_module("Analyzing anomalies in telemetry data", analyze_anomalies)
 
-    # 5. Analyze telemetry
+    # 6. Analyze telemetry
     if args.all or args.analyze_telemetry:
         from modules.analyze_telemetry import analyze_telemetry
         run_module("Analyzing telemetry", analyze_telemetry)
