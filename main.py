@@ -16,13 +16,14 @@ os.environ["ANONYMIZE_COLUMNS"] = os.getenv("ANONYMIZE_COLUMNS", "operator_name|
 # ----------------------------
 # Define command-line arguments
 # ----------------------------
-parser = argparse.ArgumentParser(description="Data Processing Pipeline")
-parser.add_argument("--anonymize", action="store_true", help="Run anonymization module")
-parser.add_argument("--load-bronze", action="store_true", help="Load data into Bronze layer (PostgreSQL)")
+parser = argparse.ArgumentParser(description="Data Processing Pipeline for InduSense Dataset")
+parser.add_argument("--anonymize", action="store_true", help="Run anonymization module only")
+parser.add_argument("--load-bronze", action="store_true", help="Load data into Bronze layer (PostgreSQL). Automatically runs anonymization first.")
+parser.add_argument("--drop-tables", action="store_true", help="Drop existing tables before loading data (requires --load-bronze)")
 parser.add_argument("--analyze-incidents", action="store_true", help="Run incidents analysis")
 parser.add_argument("--analyze-anomalies", action="store_true", help="Run anomalies analysis")
 parser.add_argument("--analyze-telemetry", action="store_true", help="Run telemetry analysis")
-parser.add_argument("--all", action="store_true", help="Run all modules (default)")
+parser.add_argument("--all", action="store_true", help="Run all modules in order: anonymize -> load-bronze -> analyze-incidents -> analyze-anomalies -> analyze-telemetry")
 
 args = parser.parse_args()
 
@@ -36,9 +37,31 @@ def run_module(module_name, module_function):
     try:
         module_function()
         print(f"✅ {module_name} completed successfully.")
+        return True
     except Exception as e:
         print(f"❌ Error in {module_name}: {e}")
         raise
+
+def drop_tables():
+    """Drop existing tables in the database."""
+    from modules.database.database_loader import drop_tables as db_drop_tables
+    print("\n🔹 Dropping existing tables...")
+    try:
+        db_drop_tables()
+        print("✅ Tables dropped successfully.")
+    except Exception as e:
+        print(f"❌ Error dropping tables: {e}")
+        raise
+
+def load_bronze_data_with_anonymization():
+    """Load bronze data with automatic anonymization first."""
+    # Run anonymization first
+    from modules.anonymize_data import anonymize_data
+    run_module("Anonymizing data", anonymize_data)
+
+    # Then load bronze data
+    from modules.database.database_loader import load_bronze_data
+    run_module("Loading [Bronze] data into PostgreSQL database", load_bronze_data)
 
 # ----------------------------
 # Execute modules based on arguments
@@ -46,18 +69,24 @@ def run_module(module_name, module_function):
 if __name__ == "__main__":
     print("🚀 Starting data processing...")
 
-    # 1. Anonymize data
-    if args.all or args.anonymize:
-        from modules.anonymize_data import anonymize_data
-        run_module("Anonymizing data", anonymize_data)
+    # Track if we've already run anonymization
+    anonymization_done = False
 
-    # 2. Load data into PostgreSQL database (Bronze layer)
+    # 1. Drop tables if requested (only if --load-bronze or --all is specified)
+    if args.drop_tables and (args.load_bronze or args.all):
+        drop_tables()
+
+    # 2. Handle anonymization and bronze loading
     if args.all or args.load_bronze:
-        from modules.anonymize_data import anonymize_data
-        run_module("Anonymizing data", anonymize_data)
-
-        from modules.database.database_loader import load_bronze_data
-        run_module("Loading [Bronze] data into PostgreSQL database", load_bronze_data)
+        load_bronze_data_with_anonymization()
+        anonymization_done = True
+    elif args.anonymize:
+        if not anonymization_done:
+            from modules.anonymize_data import anonymize_data
+            run_module("Anonymizing data", anonymize_data)
+            anonymization_done = True
+        else:
+            print("⚠️ Anonymization has already been completed in this run. Skipping.")
 
     # 3. Analyze incidents
     if args.all or args.analyze_incidents:

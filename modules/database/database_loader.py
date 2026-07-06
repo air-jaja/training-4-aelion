@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from sqlalchemy import create_engine, URL, text
 from sqlalchemy.orm import sessionmaker
-from .models import Base, Incident, Telemetry
+from .models import Base, IncidentBronze, TelemetryBronze, Machine, Maintenance
 from dotenv import load_dotenv
 import logging
 
@@ -50,7 +50,7 @@ def create_tables():
     """Create all tables defined in the models."""
     engine = get_db_engine()
     Base.metadata.create_all(engine)
-    logger.info("Database tables 'incidents_bronze' and 'telemetry_bronze' created successfully.")
+    logger.info("✅ Database tables 'incidents_bronze' and 'telemetry_bronze' created successfully.")
 
 def find_latest_anonymized_file(directory, suffix="_anonymised.csv"):
     """
@@ -118,7 +118,7 @@ def load_incidents_data():
         }
 
         # Get all model fields (excluding 'id')
-        model_fields = [col.name for col in Incident.__table__.columns if col.name != "id"]
+        model_fields = [col.name for col in IncidentBronze.__table__.columns if col.name != "id"]
 
         row_count = 0
         for _, row in df.iterrows():
@@ -133,17 +133,17 @@ def load_incidents_data():
                     incident_data[model_field] = str(value) if pd.notna(value) else ""
 
             # Create and insert the incident record (id is auto-generated)
-            incident = Incident(**incident_data)
+            incident = IncidentBronze(**incident_data)
             session.add(incident)
             row_count += 1
 
         session.commit()
-        logger.info(f"Successfully loaded {row_count} incidents into 'incidents_bronze'.")
+        logger.info(f"✅ Successfully loaded {row_count} incidents into 'incidents_bronze'.")
         return row_count
 
     except Exception as e:
         session.rollback()
-        logger.error(f"Error loading incidents data: {e}")
+        logger.error(f"❌Error loading incidents data: {e}")
         return 0
     finally:
         session.close()
@@ -185,7 +185,7 @@ def load_telemetry_data():
         }
 
         # Get all model fields (excluding 'id')
-        model_fields = [col.name for col in Telemetry.__table__.columns if col.name != "id"]
+        model_fields = [col.name for col in TelemetryBronze.__table__.columns if col.name != "id"]
 
         row_count = 0
         for _, row in df.iterrows():
@@ -200,17 +200,17 @@ def load_telemetry_data():
                     telemetry_data[model_field] = str(value) if pd.notna(value) else ""
 
             # Create and insert the telemetry record (id is auto-generated)
-            telemetry = Telemetry(**telemetry_data)
+            telemetry = TelemetryBronze(**telemetry_data)
             session.add(telemetry)
             row_count += 1
 
         session.commit()
-        logger.info(f"Successfully loaded {row_count} telemetry records into 'telemetry_bronze'.")
+        logger.info(f"✅ Successfully loaded {row_count} telemetry records into 'telemetry_bronze'.")
         return row_count
 
     except Exception as e:
         session.rollback()
-        logger.error(f"Error loading telemetry data: {e}")
+        logger.error(f"❌ Error loading telemetry data: {e}")
         return 0
     finally:
         session.close()
@@ -225,12 +225,12 @@ def load_bronze_data():
 
     # Load incidents data from anonymized files
     incidents_row_count = load_incidents_data()
-    logger.info(f"Total incidents inserted into 'incidents_bronze': {incidents_row_count}")
+    logger.info(f"✅ Total incidents inserted into 'incidents_bronze': {incidents_row_count}")
 
     # Load telemetry data from telemetry.csv
     telemetry_row_count = load_telemetry_data()
-    logger.info(f"Total telemetry records inserted into 'telemetry_bronze': {telemetry_row_count}")
+    logger.info(f"✅ Total telemetry records inserted into 'telemetry_bronze': {telemetry_row_count}")
 
     # Log summary
-    logger.info(f"Data loading complete. Incidents: {incidents_row_count}, Telemetry: {telemetry_row_count}")
+    logger.info(f"✅ Data loading complete. Incidents: {incidents_row_count}, Telemetry: {telemetry_row_count}")
     
