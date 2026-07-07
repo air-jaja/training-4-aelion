@@ -13,7 +13,9 @@ Analyze the `gold_dataset.csv` file by loading it into a Python notebook, sortin
   - Create a new Jupyter Notebook (e.g., `analysis.ipynb`).
   - Install dependencies if missing:
     ```bash
-    uv install pandas jupyter
+    uv add ipykernel pandas jupyter
+    uv add matplotlib seaborn
+    uv add pyarrow scikit-learn xgboost 
     ```
 - **Verification**: Run `import pandas as pd` in a notebook cell to confirm the library is available.
 
