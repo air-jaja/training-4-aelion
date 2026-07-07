@@ -7,11 +7,15 @@ requires-python = ">=3.14"
 dependencies = [
     "alembic>=1.18.4",
     "ipykernel>=7.3.0",
+    "jupyter>=1.1.1",
     "matplotlib>=3.11.0",
+    "numpy>=2.4.6",
     "pandas>=3.0.3",
     "psycopg>=3.3.4",
     "psycopg2-binary>=2.9.12",
+    "pyarrow>=24.0.0",
     "python-dotenv>=1.2.2",
+    "scikit-learn>=1.9.0",
     "seaborn>=0.13.2",
     "sqlalchemy>=2.0.51",
 ]
