@@ -88,8 +88,8 @@ class GoldDataset(Base):
     machine_id_std = Column(String(50))
     
     # Time window columns
-    window_start = Column(DateTime)
-    window_end = Column(DateTime)
+    window_start = Column(String(50))
+    window_end = Column(String(50))
     
     # 1-hour window features
     temp_mean_1h = Column(Float)
@@ -178,15 +178,15 @@ class GoldDataset(Base):
     hours_since_last_incident = Column(Float)
     
     # Incident type flags (boolean)
-    type_surchauffe = Column(Boolean)
-    type_baisse_pression = Column(Boolean)
-    type_vibration = Column(Boolean)
-    type_bruit_mecanique = Column(Boolean)
-    type_surconsommation = Column(Boolean)
-    type_blocage_mecanique = Column(Boolean)
-    type_alarme_capteur = Column(Boolean)
-    type_arret_urgence = Column(Boolean)
-    type_defaut_qualite = Column(Boolean)
+    type_surchauffe = Column(Integer)
+    type_baisse_pression = Column(Integer)
+    type_vibration = Column(Integer)
+    type_bruit_mecanique = Column(Integer)
+    type_surconsommation = Column(Integer)
+    type_blocage_mecanique = Column(Integer)
+    type_alarme_capteur = Column(Integer)
+    type_arret_urgence = Column(Integer)
+    type_defaut_qualite = Column(Integer)
     
     # Incident type counts (previous 24 hours)
     type_surchauffe_count_prev_24h = Column(Integer)
@@ -205,13 +205,13 @@ class GoldDataset(Base):
     
     # Future incident features (target variables for ML)
     future_incident_count_6h = Column(Integer)
-    label_failure_next_6h = Column(Boolean)
+    label_failure_next_6h = Column(String(50))
     future_incident_count_12h = Column(Integer)
-    label_failure_next_12h = Column(Boolean)
+    label_failure_next_12h = Column(String(50))
     future_incident_count_24h = Column(Integer)
-    label_failure_next_24h = Column(Boolean)
+    label_failure_next_24h = Column(String(50))
     future_incident_count_48h = Column(Integer)
-    label_failure_next_48h = Column(Boolean)
+    label_failure_next_48h = Column(String(50))
     
     # Dataset split identifier
     split_set = Column(String(50))
