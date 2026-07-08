@@ -3,33 +3,46 @@ name = "aelion-4-trainning"
 version = "0.1.0"
 description = "AELION Trainning Project - AI for IT Operations."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11,<3.12"
+authors = [{ name = "Haja RAKOTOVOALAVO PETERA", email = "haja.rakotovoalavo@beau-soleil-consulting.fr" }]
+
 dependencies = [
-    "alembic>=1.18.4",
-    "ipykernel>=7.3.0",
-    "jupyter>=1.1.1",
-    "matplotlib>=3.11.0",
-    "mlflow>=1.27.0",
-    "numpy>=2.4.6",
-    "pandas>=3.0.3",
-    "protobuf<5",
-    "psycopg>=3.3.4",
-    "psycopg2-binary>=2.9.12",
-    "pyarrow>=24.0.0",
-    "python-dotenv>=1.2.2",
-    "scikit-learn>=1.9.0",
-    "seaborn>=0.13.2",
-    "setuptools<82",
-    "shap>=0.52.0",
-    "sqlalchemy<2",
-    "xgboost>=3.3.0",
+    "pandas>=2.2",
+    "numpy>=1.26,<2.0",
+    "pyarrow>=16.0",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "huggingface-hub>=0.24",
 ]
+
 
 [dependency-groups]
 ml = [
-    "matplotlib>=3.11.0",
-    "pyarrow>=24.0.0",
-    "scikit-learn>=1.9.0",
-    "seaborn>=0.13.2",
-    "xgboost>=3.3.0",
+    "scikit-learn>=1.4",
+    "xgboost>=2.0,<3.0",
+    "optuna>=3.6",
+    "codecarbon>=2.4",
+    "shap>=0.46",
+    "mlflow>=2.13",
 ]
+dl = [
+    "tensorflow>=2.16,<2.18",
+    "tensorflow-intel>=2.16,<2.18 ; sys_platform == 'win32'",
+    # Dépendance transitive de TF : seules les versions <=0.31.0 ont des wheels Windows.
+    "tensorflow-io-gcs-filesystem==0.31.0 ; sys_platform == 'win32'",
+    "tensorflow-datasets>=4.9",
+    # tensorflow-metadata >=1.16 exige protobuf>=5, incompatible avec TF 2.17
+    # (protobuf <5). On borne metadata pour rester cohérent.
+    "tensorflow-metadata<1.16.0",
+    "albumentations>=1.4",
+    "opencv-python-headless>=4.9",
+    "scikit-image>=0.23",
+    "pillow>=10.3",
+]
+dev = [
+    "jupyter>=1.0",
+    "ipykernel>=6.29",
+    "nbconvert>=7.16",
+    "ruff>=0.5",
+]
+
