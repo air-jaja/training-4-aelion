@@ -9,11 +9,41 @@
 ## 0) Installation de l'environnement
 
 ```bash
-uv add ipykernel pandas jupyter
-uv add matplotlib seaborn
+uv add ipykernel setuptools 
+uv add pandas jupyter
+uv add matplotlib seaborn sqlalchemy
 uv add pyarrow scikit-learn 
 uv add xgboost
+# Environnement (si retour à 3.13 nécessaire à cause de l'erreur protobuf/Python 3.14)
+uv python pin 3.13.5
+# Dépendances avec versions compatibles épinglées
+uv add mlflow
+uv add "setuptools<82"
+uv add "protobuf<5"
+uv add "sqlalchemy<2"
+# Vérification
+uv run mlflow --version
 ```
+
+### Tracking MLflow avec un backend SQLite
+
+MLflow a besoin d'un backend store pour persister les runs, paramètres et métriques. SQLite est le choix le plus simple pour un usage local/mono-poste (pas de serveur à administrer, un simple fichier `.db`).
+
+```bash
+# Lancer le serveur de tracking MLflow avec SQLite comme backend store
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
+```
+
+Dans le notebook, pointer le tracking URI vers ce serveur (ou directement vers le fichier SQLite si le serveur n'est pas lancé) :
+
+```python
+import mlflow
+
+mlflow.set_tracking_uri("sqlite:///mlflow.db")  # ou "http://127.0.0.1:5000" si le serveur tourne
+mlflow.set_experiment("maintenance_predictive")
+```
+
+L'interface web (si le serveur tourne) est accessible sur `http://127.0.0.1:5000`.
 
 ---
 
@@ -616,6 +646,132 @@ pd.DataFrame(comparison_rows).set_index("seuil").round(3)
 
 ---
 
+## 12) Journaliser les paramètres et métriques dans MLflow
+
+Pour comparer et reproduire les expériences, chaque modèle (régression logistique, Random Forest, XGBoost) est journalisé dans MLflow sous forme d'un **run** distinct : hyperparamètres, métriques de l'étape 8/9, seuil choisi (étape 11), et le modèle lui-même.
+
+Prérequis : MLflow installé et backend SQLite configuré (voir étape 0). En cas d'erreur d'installation ou de compatibilité, voir le fichier de dépannage dédié (`depannage_mlflow.md`).
+
+### 12.1 Configurer le tracking
+
+```python
+import mlflow
+
+mlflow.set_tracking_uri("sqlite:///mlflow.db")  # ou "http://127.0.0.1:5000" si le serveur tourne
+mlflow.set_experiment("maintenance_predictive")
+```
+
+### 12.2 Fonction utilitaire de journalisation
+
+Centralise la journalisation pour éviter de dupliquer le code par modèle.
+
+```python
+from sklearn.metrics import (
+    average_precision_score, roc_auc_score,
+    precision_score, recall_score, f1_score,
+)
+
+def log_model_run(run_name, model, params, y_true, y_pred, y_proba, model_flavor_log_fn):
+    with mlflow.start_run(run_name=run_name):
+        # Paramètres
+        mlflow.log_param("horizon", HORIZON)
+        for name, value in params.items():
+            mlflow.log_param(name, value)
+
+        # Métriques (étapes 8-9)
+        mlflow.log_metric("pr_auc", average_precision_score(y_true, y_proba))
+        mlflow.log_metric("roc_auc", roc_auc_score(y_true, y_proba))
+        mlflow.log_metric("precision", precision_score(y_true, y_pred))
+        mlflow.log_metric("recall", recall_score(y_true, y_pred))
+        mlflow.log_metric("f1", f1_score(y_true, y_pred))
+
+        # Modèle (flavor scikit-learn ou xgboost selon le cas)
+        model_flavor_log_fn(model, "model")
+
+        print(f"Run '{run_name}' journalisé (id={mlflow.active_run().info.run_id})")
+```
+
+### 12.3 Journaliser la régression logistique
+
+```python
+import mlflow.sklearn
+
+log_model_run(
+    run_name="logistic_regression",
+    model=log_reg,
+    params={
+        "class_weight": "balanced",
+        "max_iter": log_reg.max_iter,
+        "features": "standardisées (imputer + scaler)",
+    },
+    y_true=y_test,
+    y_pred=y_pred_log,
+    y_proba=y_proba_log,
+    model_flavor_log_fn=mlflow.sklearn.log_model,
+)
+```
+
+### 12.4 Journaliser le Random Forest
+
+```python
+log_model_run(
+    run_name="random_forest",
+    model=rf,
+    params={
+        "class_weight": "balanced",
+        "n_estimators": rf.n_estimators,
+        "random_state": rf.random_state,
+        "features": "imputées (médiane)",
+    },
+    y_true=y_test,
+    y_pred=y_pred_rf,
+    y_proba=y_proba_rf,
+    model_flavor_log_fn=mlflow.sklearn.log_model,
+)
+```
+
+### 12.5 Journaliser XGBoost
+
+```python
+import mlflow.xgboost
+
+log_model_run(
+    run_name="xgboost",
+    model=xgb,
+    params={
+        "scale_pos_weight": round(scale_pos_weight, 3),
+        "random_state": xgb.random_state,
+        "features": "imputées (médiane)",
+    },
+    y_true=y_test,
+    y_pred=y_pred_xgb,
+    y_proba=y_proba_xgb,
+    model_flavor_log_fn=mlflow.xgboost.log_model,
+)
+```
+
+### 12.6 Comparer les runs
+
+```python
+runs_df = mlflow.search_runs(experiment_names=["maintenance_predictive"], order_by=["metrics.pr_auc DESC"])
+runs_df[["run_id", "tags.mlflow.runName", "metrics.pr_auc", "metrics.roc_auc", "metrics.recall", "metrics.f1"]]
+```
+
+### 12.7 Visualiser dans l'interface MLflow
+
+```bash
+uv run mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
+```
+
+Puis ouvrir `http://127.0.0.1:5000` : chaque run apparaît avec ses paramètres, métriques et le modèle téléchargeable, groupés sous l'expérience `maintenance_predictive`.
+
+⚠️ Points de vigilance :
+- Journaliser **un run par combinaison** horizon/modèle si plusieurs horizons sont testés (étape 3) — ajouter `mlflow.log_param("horizon", horizon)` distinctement à chaque run, ou nommer le run en conséquence (ex. `"random_forest_24h"`).
+- Le seuil choisi à l'étape 11 (`chosen_threshold`) peut aussi être journalisé comme paramètre (`mlflow.log_param("threshold", chosen_threshold)`) pour tracer la décision associée à chaque run.
+- `mlflow.sklearn.log_model` et `mlflow.xgboost.log_model` sauvegardent le modèle comme artefact MLflow (rechargeable ensuite via `mlflow.pyfunc.load_model`), ce qui facilite le déploiement ou la comparaison a posteriori.
+
+---
+
 ## Résumé du pipeline
 
 1. `read_parquet` → `sort_values(["machine_id_std", "window_start"])`
@@ -629,3 +785,4 @@ pd.DataFrame(comparison_rows).set_index("seuil").round(3)
 9. Lister les métriques scikit-learn disponibles, choisir celles adaptées au déséquilibre et au coût métier (PR-AUC, recall, F1/F2), puis les calculer pour chaque modèle
 10. Validation croisée temporelle (`TimeSeriesSplit`, 5 folds sur le train) → tableau par fold, moyenne ± écart-type, bornes temporelles, visualisation du découpage et de la stabilité des métriques
 11. Choisir un seuil de décision sur la validation (maximiser F1 ou garantir un recall minimum), l'appliquer sur le test, comparer au seuil par défaut (0.5)
+12. Journaliser paramètres, métriques et modèle dans MLflow pour chacun des 3 modèles (régression logistique, Random Forest, XGBoost), comparer les runs et visualiser dans l'UI MLflow
