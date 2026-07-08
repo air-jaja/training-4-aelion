@@ -772,6 +772,93 @@ Puis ouvrir `http://127.0.0.1:5000` : chaque run apparaît avec ses paramètres,
 
 ---
 
+## 13) Tableau comparatif, graphes et choix du meilleur modèle
+
+Synthèse des résultats obtenus sur le jeu de test pour l'horizon `label_failure_next_24h` (étapes 8 à 11), pour trancher entre les 3 modèles.
+
+### 13.1 Tableau comparatif (seuil par défaut 0.5)
+
+| Modèle | PR-AUC | ROC-AUC | Precision | Recall | F1 |
+|---|---|---|---|---|---|
+| Logistic Regression | 0.577 | 0.762 | 0.554 | 0.544 | 0.549 |
+| **Random Forest** | **0.613** | **0.767** | 0.865 | 0.375 | 0.523 |
+| XGBoost | 0.579 | 0.745 | 0.614 | 0.478 | 0.537 |
+
+*(PR-AUC et ROC-AUC sont indépendants du seuil — ils mesurent la qualité du classement des scores, pas d'une décision binaire précise. Voir étape 9.)*
+
+### 13.2 Effet du seuil optimisé (étape 11) — exemple Random Forest
+
+| Seuil | Precision | Recall | F1 |
+|---|---|---|---|
+| 0.5 (défaut) | 0.855 | 0.381 | 0.527 |
+| **0.4 (optimisé F1 sur validation)** | 0.787 | 0.440 | **0.564** |
+
+Le Random Forest a la plus forte precision à 0.5 mais un recall faible (beaucoup de pannes manquées). Abaisser le seuil à 0.4 rééquilibre precision/recall et fait passer son F1 de 0.523 à **0.564** — meilleur score F1 toutes méthodes confondues (à comparer aux 0.549 de la régression logistique et 0.537 de XGBoost, eux-mêmes non encore réoptimisés sur seuil).
+
+### 13.3 Générer les graphiques comparatifs
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+metrics_to_plot = ["pr_auc", "roc_auc", "precision", "recall", "f1"]
+x = np.arange(len(metrics_to_plot))
+width = 0.25
+
+fig, ax = plt.subplots(figsize=(10, 5))
+for i, model_name in enumerate(results_df.index):
+    ax.bar(x + i * width, results_df.loc[model_name, metrics_to_plot], width, label=model_name)
+
+ax.set_xticks(x + width)
+ax.set_xticklabels(metrics_to_plot)
+ax.set_ylabel("Score")
+ax.set_title(f"Comparaison des modèles — {HORIZON} (seuil par défaut 0.5)")
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+```python
+# Courbe précision-rappel comparative (déjà produite à l'étape 8.4)
+# -> c'est le graphique le plus pertinent pour choisir un modèle indépendamment du seuil :
+# la courbe la "plus haute à droite" domine les autres sur toute la plage de seuils possibles.
+```
+
+```python
+# Effet du seuil sur le F1 par modèle (reprendre la logique de l'étape 11.2 pour chaque modèle)
+fig, ax = plt.subplots(figsize=(8, 5))
+for name, (_, y_proba) in models_preds.items():
+    precisions_m, recalls_m, thresholds_m = precision_recall_curve(y_test, y_proba)
+    f1_m = 2 * precisions_m[:-1] * recalls_m[:-1] / (precisions_m[:-1] + recalls_m[:-1] + 1e-12)
+    ax.plot(thresholds_m, f1_m, label=name)
+ax.set_xlabel("Seuil de décision")
+ax.set_ylabel("F1")
+ax.set_title(f"F1 en fonction du seuil, par modèle — {HORIZON}")
+ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+Ce dernier graphique est le plus utile pour la décision : il montre, pour **chaque** modèle, son meilleur F1 atteignable (pas seulement au seuil 0.5) — condition nécessaire pour une comparaison équitable.
+
+### 13.4 Choix du modèle et argumentation
+
+**Modèle retenu : Random Forest**, avec seuil de décision ajusté à 0.4 (au lieu de 0.5 par défaut).
+
+Arguments :
+
+1. **Meilleure capacité de classement (métriques indépendantes du seuil)** : Random Forest a le PR-AUC le plus élevé (0.613 vs 0.577 et 0.579) et le ROC-AUC le plus élevé (0.767 vs 0.762 et 0.745). C'est le critère le plus fiable pour comparer des modèles sur classes déséquilibrées (étape 9), car il ne dépend pas d'un choix de seuil arbitraire.
+2. **Son faible recall par défaut est un artefact de seuil, pas un défaut intrinsèque** : à 0.5, le Random Forest est très précis (0.865) mais rate beaucoup de pannes (recall 0.375). Comme il classe mieux les cas positifs (PR-AUC le plus haut), il suffit d'abaisser le seuil pour révéler cette capacité — ce qui donne le meilleur F1 global (0.564) une fois optimisé.
+3. **Interprétabilité opérationnelle** : contrairement à XGBoost (performance intermédiaire ici) et à la régression logistique (limitée aux relations linéaires après standardisation), le Random Forest fournit une importance des features directement exploitable (étape 8.6) pour orienter la maintenance (quelles variables regarder en priorité).
+4. **Marge d'ajustement métier** : le seuil peut encore être déplacé vers un recall plus élevé (option B de l'étape 11.4, ex. recall ≥ 80 %) si le coût d'une panne manquée s'avère plus élevé que prévu — le Random Forest conserve alors la meilleure precision à recall égal, grâce à son PR-AUC supérieur.
+
+⚠️ Nuances à garder à l'esprit :
+- Cette comparaison porte sur un seul horizon (`24h`) et un split unique ; la refaire pour les autres horizons (`6h`, `12h`, `48h` — étape 3) avant de généraliser le choix.
+- Les écarts de PR-AUC entre les 3 modèles restent modestes (0.577 à 0.613) — sur un autre tirage de données ou avec un tuning d'hyperparamètres plus poussé (non couvert ici), XGBoost pourrait rattraper ou dépasser le Random Forest.
+- Si la contrainte métier prioritaire est un recall très élevé (détecter un maximum de pannes, quitte à multiplier les fausses alertes), la régression logistique — plus stable en recall à seuil par défaut — mérite d'être réévaluée après son propre tuning de seuil (étape 11, non encore appliqué ici qu'au Random Forest).
+
+---
+
 ## Résumé du pipeline
 
 1. `read_parquet` → `sort_values(["machine_id_std", "window_start"])`
@@ -786,3 +873,4 @@ Puis ouvrir `http://127.0.0.1:5000` : chaque run apparaît avec ses paramètres,
 10. Validation croisée temporelle (`TimeSeriesSplit`, 5 folds sur le train) → tableau par fold, moyenne ± écart-type, bornes temporelles, visualisation du découpage et de la stabilité des métriques
 11. Choisir un seuil de décision sur la validation (maximiser F1 ou garantir un recall minimum), l'appliquer sur le test, comparer au seuil par défaut (0.5)
 12. Journaliser paramètres, métriques et modèle dans MLflow pour chacun des 3 modèles (régression logistique, Random Forest, XGBoost), comparer les runs et visualiser dans l'UI MLflow
+13. Tableau comparatif + graphiques (barres par métrique, F1 vs seuil par modèle) → choix argumenté du meilleur modèle (Random Forest, seuil 0.4)

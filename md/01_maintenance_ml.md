@@ -10,10 +10,11 @@
 
 ```bash
 uv add ipykernel setuptools 
-uv add pandas jupyter
-uv add matplotlib seaborn sqlalchemy
+uv add pandas jupyter sqlalchemy
+uv add matplotlib seaborn 
 uv add pyarrow scikit-learn 
 uv add xgboost
+uv add matplotlib seaborn xgboost pyarrow scikit-learn --group ml
 # Environnement (si retour à 3.13 nécessaire à cause de l'erreur protobuf/Python 3.14)
 uv python pin 3.13.5
 # Dépendances avec versions compatibles épinglées
