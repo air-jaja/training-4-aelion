@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=1.26,<2.0",
     "pyarrow>=16.0",
     "matplotlib>=3.8",
+    "scikit-learn>=1.4",
     "seaborn>=0.13",
     "huggingface-hub>=0.24",
 ]
@@ -35,7 +36,6 @@ dl = [
     # (protobuf <5). On borne metadata pour rester cohérent.
     "tensorflow-metadata<1.16.0",
     "albumentations>=1.4",
-    "opencv-python-headless>=4.9",
     "scikit-image>=0.23",
     "pillow>=10.3",
 ]
