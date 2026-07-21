@@ -14,7 +14,8 @@ wheels/
 .venv
 .python-version
 *.lock
-*.png
+/graphs/**/*.png
+/artifacts/**/*.png
 /artifacts/ingestions/incidents/**/*.csv
 /.vscode/*
 /artifacts/ingestions/telemetry/**/*.csv

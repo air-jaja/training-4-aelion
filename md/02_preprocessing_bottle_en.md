@@ -85,21 +85,48 @@ Principle: Pillow/OpenCV for I/O and low-level resizing, Albumentations for augm
 - Fix the seed for reproducibility (`random_state=42`).
 - Important: the split is done **on file paths before loading**, not on tensors, to stay memory-efficient.
 
-### 3.6 Augmentation (Albumentations) — training only
+### 3.6 Augmentation pipeline (Albumentations) — normal training images only
 
-- Applied only to the `train/good` subset after splitting (never on validation/test, to evaluate on data representative of reality).
-- Light augmentations consistent with the use case (a bottle should still look like a bottle):
-  - `HorizontalFlip`
-  - `RandomBrightnessContrast` (light, industrial lighting tends to be fairly stable)
-  - `Rotate` (small amplitude, ±10-15°)
-  - Avoid strong distortions (`ElasticTransform`, `GridDistortion`) that would distort the notion of "normal" in an anomaly detection context.
-- No mask augmentation here since augmentation only applies to `train/good` (no mask associated with normal images).
+A dedicated augmentation pipeline is applied **only** to the `train/good` subset after splitting (never on validation/test, to evaluate on data representative of reality — no associated mask anyway since these are normal images).
 
-### 3.7 Building the `tf.data` pipeline
+Transformations chosen, consistent with the use case (a bottle must still look recognizably "normal"):
+
+| Transformation | Purpose | Suggested parameters |
+|---|---|---|
+| `HorizontalFlip` | Horizontal symmetry (bottle viewed from a fairly symmetric angle) | `p=0.5` |
+| `Rotate` | Slight rotation (variable camera angle) | `limit=15°`, `p=0.5` |
+| `ShiftScaleRotate` | Translation + slight scaling (imperfect camera centering/zoom) | `shift_limit=0.05`, `scale_limit=0.1`, `rotate_limit=0` (rotation already handled separately), `p=0.5` |
+| `RandomBrightnessContrast` | Lighting variations (industrial conditions are never perfectly stable) | `brightness_limit=0.15`, `contrast_limit=0.15`, `p=0.5` |
+
+**Pitfalls to avoid**: no strong distortions (`ElasticTransform`, `GridDistortion`) or aggressive cropping — these would distort the notion of "normal" in an anomaly detection context, where the model needs to learn a stable geometric shape.
+
+### 3.7 Visual check of augmentation (original vs augmented)
+
+Before wiring augmentation into the training pipeline, visually compare, for several normal images:
+- the **original** resized image (no augmentation)
+- **several augmented draws** of the same image (the pipeline being stochastic, each call produces a different result)
+
+Goal: confirm by eye that the transformations stay realistic (no unrecognizable bottle, no aberrant colors) and that each draw actually produces a different variation (the pipeline isn't a no-op).
+
+### 3.8 Visual check of the loading pipeline
+
+Before building the `tf.data` pipeline, display a grid of loaded/resized images: a few normal images (`train/good`) and a few images from each defect class (`test/<defect>`), with their `ground_truth` mask overlaid for the defects.
+
+- Goal: catch a loading issue by eye (BGR/RGB channel swap, image/mask misalignment, color corruption after resizing) before spending time on training.
+- For each defect, display the resized image and its resized mask side by side (or overlaid), to visually confirm the mask actually matches the defective area.
+
+### 3.9 Building the `tf.data` pipeline (training / validation)
 
 - `tf.data.Dataset.from_tensor_slices(file_paths)` → `.map(load_and_preprocess, num_parallel_calls=tf.data.AUTOTUNE)` → `.batch(BATCH_SIZE)` → `.prefetch(tf.data.AUTOTUNE)`.
 - `load_and_preprocess` function: reading (Pillow/OpenCV) + resize + normalization, wrapped via `tf.py_function` or `tf.numpy_function` if keeping OpenCV/Albumentations (not natively compatible with the TensorFlow graph), or alternatively a 100% TensorFlow variant (`tf.io.decode_image`, `tf.image.resize`) to avoid `py_function` and gain performance.
-- `.cache()` possible after the first pass if the dataset fits in memory (bottle is a small dataset, a few hundred images).
+- Augmentation (step 3.6) applied only to the training pipeline, never to the validation one.
+- `.cache()` possible after the first pass if the dataset fits in memory (bottle is a small dataset, a few hundred images) — avoid on the training pipeline if augmentation is enabled (a different draw is wanted at each epoch).
+
+### 3.10 Building the test datasets (evaluation)
+
+- `test/good` + each `test/<defect>`: same loading function as training, but **no augmentation**, just resize + normalization.
+- `ground_truth/<defect>` masks resized in parallel (step 3.3) for future pixel-level evaluation (IoU, pixel AUC-ROC), grouped by defect class.
+- One `tf.data` dataset per defect class (plus one for `test/good`), to evaluate and report metrics separately per defect type.
 
 ---
 

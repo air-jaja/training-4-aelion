@@ -115,11 +115,18 @@ Avant de construire le pipeline `tf.data`, afficher une grille d'images chargée
 - Objectif : détecter à l'œil un problème de chargement (inversion de canaux BGR/RGB, mauvais alignement image/masque, écrasement de couleurs après resize) avant d'investir du temps dans l'entraînement.
 - Afficher, pour chaque défaut : l'image redimensionnée et son masque redimensionné côte à côte (ou en surimpression), pour confirmer visuellement que le masque correspond bien à la zone défectueuse.
 
-### 3.8 Construction du pipeline `tf.data`
+### 3.9 Construction du pipeline `tf.data` (entraînement / validation)
 
 - `tf.data.Dataset.from_tensor_slices(file_paths)` → `.map(load_and_preprocess, num_parallel_calls=tf.data.AUTOTUNE)` → `.batch(BATCH_SIZE)` → `.prefetch(tf.data.AUTOTUNE)`.
 - Fonction `load_and_preprocess` : lecture (Pillow/OpenCV) + resize + normalisation, encapsulée via `tf.py_function` ou `tf.numpy_function` si on garde OpenCV/Albumentations (pas nativement compatibles avec le graphe TensorFlow), sinon variante 100 % TensorFlow (`tf.io.decode_image`, `tf.image.resize`) si on veut éviter le `py_function` et gagner en performance.
-- `.cache()` possible après le premier passage si le dataset tient en mémoire (bottle = petit dataset, quelques centaines d'images).
+- Augmentation (étape 3.6) appliquée uniquement au pipeline d'entraînement, jamais à celui de validation.
+- `.cache()` possible après le premier passage si le dataset tient en mémoire (bottle = petit dataset, quelques centaines d'images) — à ne pas utiliser sur le pipeline d'entraînement si l'augmentation est activée (on veut un tirage différent à chaque epoch).
+
+### 3.10 Construction des datasets de test (évaluation)
+
+- `test/good` + chaque `test/<defect>` : même fonction de chargement que l'entraînement, mais **sans augmentation**, juste resize + normalisation.
+- Masques `ground_truth/<defect>` redimensionnés en parallèle (étape 3.3) pour l'évaluation pixel-level future (IoU, AUC-ROC pixel), regroupés par classe de défaut.
+- Un dataset `tf.data` par classe de défaut (plus un pour `test/good`), pour pouvoir évaluer et rapporter les métriques séparément par type de défaut.
 
 ---
 
