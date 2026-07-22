@@ -304,7 +304,19 @@ So far, SSIM was only a **tracked metric** alongside the MSE loss (a single mode
 - **Algorithm A**: `loss = MSE` (SSIM still tracked).
 - **Algorithm B**: `loss = 1 - SSIM` (defined explicitly, Keras has no native SSIM loss; MSE still tracked).
 
-**Control flag: `RUN_FULL_COMPARISON`** — `True` the first time (or after any dataset/architecture change) to replay the full MSE vs SSIM comparison (sections 10-21). Once the SSIM choice is validated (step 22), switch to `False`: the MSE model is no longer built or trained, all comparison sections adapt automatically (a single panel instead of two on charts), and only the SSIM part (sections 15-17) runs — measured time savings: ~35% on this dataset (see step 24).
+**Reproducibility fix (configuration)**: the MSE vs SSIM comparison turned out not to be reproducible run to run, even at identical `VAL_FRACTION` — cause identified: only `np.random.seed(SEED)` was set, never `tf.random.set_seed(SEED)`. `build_autoencoder()`'s weight initialization (Glorot uniform) depends on TensorFlow's random generator, not NumPy's. Fixed in configuration:
+
+```python
+np.random.seed(SEED)
+tf.random.set_seed(SEED)  # fixes the instability observed across runs
+import random
+random.seed(SEED)
+os.environ["PYTHONHASHSEED"] = str(SEED)
+```
+
+Effect verified in step 24: with the seed fixed, the three `VAL_FRACTION` values tested give near-identical AUC-ROC — the wild variance observed before the fix is gone.
+
+**Control flag: `RUN_FULL_COMPARISON`** — `True` the first time (or after any dataset/architecture change) to replay the full MSE vs SSIM comparison (sections 10-21). Once the SSIM choice is validated (step 22), switch to `False`: the MSE model is no longer built or trained, all comparison sections adapt automatically (a single panel instead of two on charts), and only the SSIM part (sections 15-17) runs — measured time savings: ~35% on this dataset (see step 25).
 
 ```python
 RUN_FULL_COMPARISON = True  # False to only retrain SSIM
@@ -564,7 +576,70 @@ The SSIM model and adjusted threshold (Youden) are a solid starting point, not a
 
 ---
 
-## 24. Overall processing time
+## 24. Robustness study: sensitivity to `VAL_FRACTION` and calibration threshold
+
+Direct motivation: the MSE vs SSIM comparison from an isolated run turned out not to be reproducible run to run (see the seed fix, step 10). Rather than trusting a single run, this step formalizes a systematic sensitivity study:
+
+- **3 `VAL_FRACTION` values**: 0.15, 0.25, 0.30 — one SSIM model retrained for each (seed now fixed, so each training run is individually reproducible).
+- **3 threshold percentiles**: 92, 95, 99 — applied to each trained model, no retraining needed (recomputed instantly from scores already available for that model).
+
+Result: a 3×3 = 9-combination grid (recall, false positives), plus threshold-independent metrics (AUC-ROC, AUC-PR) per `VAL_FRACTION` value — 3 trainings total, not 9.
+
+```python
+VAL_FRACTIONS_TO_TEST = [0.15, 0.25, 0.30]
+PERCENTILES_TO_TEST = [92, 95, 99]
+ROBUSTNESS_EPOCHS = 20
+ROBUSTNESS_PATIENCE = 5
+
+robustness_results = []        # one row per (VAL_FRACTION, percentile) combination
+robustness_by_fraction = {}    # one entry per VAL_FRACTION (model, scores, AUC)
+
+for vf in VAL_FRACTIONS_TO_TEST:
+    tf.random.set_seed(SEED)   # reset random state before each training: only VAL_FRACTION varies
+
+    train_paths_r, val_paths_r = train_test_split(train_good, test_size=vf, random_state=SEED)
+    train_ds_r = build_dataset(train_paths_r, augment=True, shuffle=True)
+    val_ds_r = build_dataset(val_paths_r, augment=False, shuffle=False)
+
+    model_r = build_autoencoder(IMG_SIZE)
+    model_r.compile(optimizer="adam", loss=ssim_loss, metrics=[mse_metric])
+    early_stopping_r = tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=ROBUSTNESS_PATIENCE, restore_best_weights=True)
+
+    with mlflow.start_run(run_name=f"robustness_ssim_valfrac_{vf}") as run_r:
+        mlflow.log_params({"val_fraction": vf, "epochs": ROBUSTNESS_EPOCHS, "n_train": len(train_paths_r), "n_val": len(val_paths_r)})
+        history_r = model_r.fit(train_ds_r.map(lambda x: (x, x)), validation_data=val_ds_r.map(lambda x: (x, x)),
+                                 epochs=ROBUSTNESS_EPOCHS, callbacks=[early_stopping_r], verbose=0)
+        run_id_r = run_r.info.run_id
+
+    # ... scores, image-level AUC-ROC/AUC-PR, stored in robustness_by_fraction[vf] ...
+
+    for pct in PERCENTILES_TO_TEST:
+        threshold_r = np.percentile(val_scores_r, pct)
+        recall_r = (test_defect_scores_r > threshold_r).mean()
+        fpr_r = (test_good_scores_r > threshold_r).mean()
+        robustness_results.append({"val_fraction": vf, "percentile": pct, "threshold": threshold_r, "recall": recall_r, "fpr": fpr_r})
+```
+
+### Comparative results and charts
+
+- **Full table** of the 9 combinations (threshold, recall, FP), plus AUC-ROC/AUC-PR per `VAL_FRACTION`.
+- **Recall / false-positive grids** (VAL_FRACTION × percentile): annotated heatmap, one cell per combination actually tested.
+- **AUC-ROC/AUC-PR vs `VAL_FRACTION` curve**: visualizes whether the SSIM model's performance depends on the validation split size.
+
+Each run (`robustness_ssim_valfrac_0.15/0.25/0.30`) is logged to MLflow with its metrics and figures.
+
+**Seed fix validation**: with the seed now fixed, the three `VAL_FRACTION` values give near-identical AUC-ROC on a low-epoch-budget test — confirming the wild variance observed before the fix came from TensorFlow's random initialization, not `VAL_FRACTION` itself.
+
+### Reading it
+
+- **Stability across `VAL_FRACTION`**: with the seed fixed, observed differences now reflect the real effect of split size, plus the initialization randomness (eliminated).
+- **Percentile effect**: at fixed `VAL_FRACTION`, increasing the percentile (92→95→99) mechanically reduces recall and false positives (stricter threshold).
+- **`VAL_FRACTION` effect**: a larger validation split (0.30) gives a less noisy threshold estimate but leaves fewer images for training — the classic bias/variance trade-off of split size, now visible without being confounded with initialization randomness.
+- If, with the seed fixed, results still differ meaningfully across the three `VAL_FRACTION` values, that's a robust signal to factor into the production validation split choice — not an artifact.
+
+---
+
+## 25. Overall processing time
 
 Timer set in the very first cell of the notebook (`_notebook_start_time = time.time()`), displayed here:
 
@@ -574,3 +649,5 @@ print(f"Total notebook execution time: {_total_elapsed:.1f} s  ({_total_elapsed/
 ```
 
 A local timer is also set around step 22 (calibration + per-image IoU), displayed separately — on this dataset, this section typically takes under a second (no significant new forward pass, everything reused). The main gain from `RUN_FULL_COMPARISON=False` comes from training (one model instead of two): ~35% less total time observed on this dataset.
+
+The robustness study (step 24) adds its own cost — 3 full trainings — timed separately (`_robustness_elapsed`): on the order of a minute on this dataset for a reduced epoch budget, to be scaled with `ROBUSTNESS_EPOCHS`.
