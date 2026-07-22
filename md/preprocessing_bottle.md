@@ -1,6 +1,6 @@
 # Pipeline complet `bottle` — Prétraitement + Autoencodeur convolutionnel (détection d'anomalies, MVTec-AD)
 
-Document en deux parties : **Partie 1** (sections Contexte à 6) couvre le prétraitement des données ; **Partie 2** (sections 7 à 17) couvre la conception, l'entraînement et le suivi MLflow de l'autoencodeur convolutionnel. Notebook associé : `pipeline_bottle_full.ipynb`.
+Document en deux parties : **Partie 1** (sections Contexte à 6) couvre le prétraitement des données ; **Partie 2** (sections 7 à 24) couvre la conception, l'entraînement et le suivi MLflow de l'autoencodeur convolutionnel. Notebook associé : `pipeline_bottle_full.ipynb`.
 
 ## Contexte
 
@@ -180,7 +180,7 @@ L'augmentation (Albumentations) se fait **à la volée** dans le pipeline `tf.da
 
 ## 6. Transition vers la partie 2
 
-Le prétraitement ci-dessus produit `train_ds`, `val_ds`, `test_good_ds`, `test_defect_ds` et `test_defect_masks`, prêts à l'emploi. La partie 2 (sections 7 à 20) les réutilise directement pour concevoir, entraîner et évaluer un autoencodeur convolutionnel.
+Le prétraitement ci-dessus produit `train_ds`, `val_ds`, `test_good_ds`, `test_defect_ds` et `test_defect_masks`, prêts à l'emploi. La partie 2 (sections 7 à 24) les réutilise directement pour concevoir, entraîner et évaluer un autoencodeur convolutionnel.
 
 ---
 
@@ -235,34 +235,32 @@ autoencoder = build_autoencoder()
 
 ### Informations clés du bottleneck
 
-Avant de lire le `summary()` complet, on isole les informations qui caractérisent le bottleneck lui-même — c'est la partie de l'architecture qui détermine la capacité de compression du modèle, donc sa capacité à distinguer le "normal" de l'anormal.
+Avant de lire le `summary()` complet, on isole les informations qui caractérisent le bottleneck lui-même.
 
 ```python
 bottleneck_layer_name = "enc_conv4"
 bottleneck_layer = autoencoder.get_layer(bottleneck_layer_name)
-bottleneck_shape = bottleneck_layer.output.shape[1:]   # (H', W', C'), sans la dimension de batch
-input_shape = autoencoder.input.shape[1:]              # (H, W, C)
+bottleneck_shape = bottleneck_layer.output.shape[1:]
+input_shape = autoencoder.input.shape[1:]
 
 bottleneck_values = int(np.prod(bottleneck_shape))
 input_values = int(np.prod(input_shape))
-spatial_reduction = input_shape[0] // bottleneck_shape[0]   # ex. 128 // 8 = 16
+spatial_reduction = input_shape[0] // bottleneck_shape[0]
 compression_ratio = input_values / bottleneck_values
 
 print(f"Couche bottleneck         : {bottleneck_layer_name}")
-print(f"Forme entrée              : {tuple(input_shape)}  ({input_values} valeurs)")
 print(f"Forme bottleneck          : {tuple(bottleneck_shape)}  ({bottleneck_values} valeurs)")
 print(f"Réduction spatiale        : ÷{spatial_reduction} en hauteur et en largeur")
-print(f"Canaux bottleneck         : {bottleneck_shape[-1]}")
 print(f"Ratio de compression      : {compression_ratio:.2f}x")
 ```
 
-Sur ce modèle (`128×128×3`, `base_filters=32`) : bottleneck `enc_conv4` = `(8, 8, 256)`, soit 16 384 valeurs contre 49 152 en entrée — réduction spatiale ÷16, ratio de compression 3.00x.
+Sur ce modèle (`128×128×3`, `base_filters=32`) : bottleneck `enc_conv4` = `(8, 8, 256)`, réduction spatiale ÷16, ratio de compression 3.00x.
 
 ---
 
 ## 8. Lecture du `summary()`
 
-**Rappel bottleneck** (calculé en étape 7, affiché en évidence juste avant le tableau) : c'est `enc_conv4` qui porte le `Output Shape` le plus petit — repérer cette ligne en premier, c'est elle qui contraint toute la capacité du modèle.
+**Rappel bottleneck** (calculé en étape 7, affiché en évidence juste avant le tableau) : c'est `enc_conv4` qui porte le `Output Shape` le plus petit — repérer cette ligne en premier.
 
 ```python
 print("=" * 60)
@@ -274,102 +272,65 @@ print("=" * 60)
 autoencoder.summary()
 ```
 
-Points à vérifier systématiquement dans le tableau affiché :
-
-1. **Output Shape de la dernière couche == Output Shape de l'entrée** (`(None, 128, 128, 3)` des deux côtés) — condition nécessaire pour comparer la reconstruction à l'original pixel à pixel.
-2. **Param # d'une `Conv2D`** : `(kernel_h × kernel_w × canaux_entrée + 1) × canaux_sortie` (le `+1` = biais par filtre).
-3. **Symétrie du nombre de paramètres** entre encodeur et décodeur — un déséquilibre marqué signale souvent un bottleneck mal dimensionné.
-4. **Total params vs volume de données** : à mettre en regard du nombre d'images d'entraînement pour anticiper un risque de sur-apprentissage.
-
-```python
-def conv2d_params(kernel, in_channels, out_channels):
-    return (kernel * kernel * in_channels + 1) * out_channels
-
-print("enc_conv1 attendu :", conv2d_params(3, 3, 32), "  (résultat summary() : 896)")
-print("enc_conv2 attendu :", conv2d_params(3, 32, 64), " (résultat summary() : 18496)")
-```
+Points à vérifier systématiquement :
+1. **Output Shape de la dernière couche == Output Shape de l'entrée**.
+2. **Param # d'une `Conv2D`** : `(kernel_h × kernel_w × canaux_entrée + 1) × canaux_sortie`.
+3. **Symétrie du nombre de paramètres** entre encodeur et décodeur.
+4. **Total params vs volume de données**.
 
 ### Ratio de compression
 
-Le bottleneck ne se juge pas qu'au nombre de paramètres — ce qui compte, c'est combien de **valeurs** il faut pour représenter une image une fois passée dans l'encodeur, comparé au nombre de valeurs de l'image d'origine. Ces valeurs ont déjà été calculées en étape 7 — on les réaffiche ici en contexte, juste après le `summary()` :
-
-```
-ratio de compression = (nb de valeurs en entrée) / (nb de valeurs dans le latent)
-                      = (H × W × C entrée) / (H' × W' × C' latent)
-```
-
-```python
-print(f"Entrée   : {tuple(input_shape)} -> {input_values} valeurs")
-print(f"Latent   : {tuple(bottleneck_shape)} -> {bottleneck_values} valeurs")
-print(f"Ratio de compression : {compression_ratio:.2f}x")
-```
-
-**Lecture** : un ratio élevé (bottleneck très compact) force le modèle à apprendre une représentation plus abstraite du "normal" — utile pour la détection d'anomalie, mais risque de sous-apprentissage si le ratio est trop agressif. Un ratio trop faible risque à l'inverse de laisser le modèle apprendre une quasi-identité, peu informative pour distinguer sain/défectueux.
+Ce qui compte, c'est combien de **valeurs** il faut pour représenter une image une fois passée dans l'encodeur, comparé au nombre de valeurs de l'image d'origine — déjà calculé en étape 7, réaffiché ici en contexte. Un ratio élevé force une représentation plus abstraite (risque de sous-apprentissage si trop agressif) ; un ratio trop faible risque une quasi-identité peu informative.
 
 ---
 
 ## 9. Vérification sur un vrai batch du pipeline
 
-Avant d'aller plus loin, faire passer un vrai batch de `train_ds` dans le modèle de référence (poids encore aléatoires) pour vérifier que les formes s'enchaînent correctement de bout en bout :
-
 ```python
 for batch in train_ds.take(1):
     reconstruction = autoencoder(batch)
-    print("Batch d'entrée :", batch.shape)
-    print("Reconstruction :", reconstruction.shape)
-
     mse = tf.keras.losses.MeanSquaredError()
     print("MSE (poids aléatoires, avant tout entraînement) :", float(mse(batch, reconstruction)))
 ```
 
-Aperçu visuel (entrée vs reconstruction, poids aléatoires — non informatif à ce stade, sert juste à confirmer que le pipeline image → modèle → image fonctionne).
+Aperçu visuel (entrée vs reconstruction, poids aléatoires — non informatif, sert juste à confirmer le pipeline).
 
 ---
 
 ## 10. Deux algorithmes à comparer : perte MSE vs perte SSIM
 
-Jusqu'ici, SSIM n'était qu'une **métrique suivie** à côté de la loss MSE (un seul modèle). Pour comprendre l'écart avant/après entraînement propre à chaque critère d'optimisation, on entraîne maintenant **deux modèles indépendants**, de même architecture (`build_autoencoder`), mais chacun optimisé sur sa propre perte :
+Jusqu'ici, SSIM n'était qu'une **métrique suivie** à côté de la loss MSE (un seul modèle). Pour comprendre l'écart avant/après entraînement propre à chaque critère d'optimisation, on entraîne **deux modèles indépendants**, de même architecture, chacun optimisé sur sa propre perte :
 
-- **Algorithme A** : `loss = MSE` (la métrique SSIM reste suivie, pour comparaison).
-- **Algorithme B** : `loss = 1 - SSIM` (Keras n'a pas de loss SSIM native, on la définit explicitement ; la métrique MSE reste suivie, pour comparaison).
+- **Algorithme A** : `loss = MSE` (SSIM restant suivie).
+- **Algorithme B** : `loss = 1 - SSIM` (définie explicitement, Keras n'a pas de loss SSIM native ; MSE restant suivie).
 
-Les deux modèles partent de poids aléatoires indépendants, et sont évalués sur le **même batch de validation fixe** (`x_val_fixed`) avant et après entraînement — condition nécessaire pour que la comparaison "avant/après" soit valide pour chaque algorithme.
+**Flag de contrôle : `RUN_FULL_COMPARISON`** — à `True` la première fois (ou après tout changement de dataset/architecture) pour rejouer la comparaison complète MSE vs SSIM (sections 10-21). Une fois le choix de SSIM validé (étape 22), repasser à `False` : le modèle MSE n'est plus construit ni entraîné, toutes les sections de comparaison s'adaptent automatiquement (un seul panneau au lieu de deux sur les graphiques), et seule la partie SSIM (sections 15-17) s'exécute — gain de temps mesuré : ~35 % sur ce dataset (voir étape 24).
 
 ```python
-def ssim_metric(y_true, y_pred):
-    return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
-ssim_metric.__name__ = "ssim"
-
-def ssim_loss(y_true, y_pred):
-    return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
-
-def mse_metric(y_true, y_pred):
-    return tf.reduce_mean(tf.square(y_true - y_pred))
-mse_metric.__name__ = "mse"
+RUN_FULL_COMPARISON = True  # False pour ne réentraîner que SSIM
+MODEL_COLORS = {"MSE": "#4C72B0", "SSIM": "#DD8452"}  # couleurs cohérentes, utilisées dynamiquement partout
 
 train_ds_xy = train_ds.map(lambda x: (x, x))
 val_ds_xy = val_ds.map(lambda x: (x, x))
 
-# Deux instances indépendantes, mêmes hyperparamètres d'architecture
-model_mse = build_autoencoder(IMG_SIZE)
-model_ssim = build_autoencoder(IMG_SIZE)
+model_ssim = build_autoencoder(IMG_SIZE)  # modèle retenu : toujours construit
 
-# Même batch de validation fixe pour une comparaison avant/après valide sur les deux algorithmes
+if RUN_FULL_COMPARISON:
+    model_mse = build_autoencoder(IMG_SIZE)  # modèle de comparaison : uniquement si demandé
+
 for batch in val_ds_xy.take(1):
     x_val_fixed, _ = batch
 
-recon_mse_before = model_mse(x_val_fixed)
 recon_ssim_before = model_ssim(x_val_fixed)
+if RUN_FULL_COMPARISON:
+    recon_mse_before = model_mse(x_val_fixed)
 ```
 
 ---
 
 ## 11. Suivi MLflow
 
-Même convention que le reste du projet (SQLite locale, `mlflow/mlflow.db`). **Un run MLflow distinct par algorithme** (`conv_autoencoder_mse` et `conv_autoencoder_ssim`), pour comparer les deux dans l'UI MLflow (`mlflow ui --backend-store-uri sqlite:///mlflow/mlflow.db`) :
-- **Params** : `img_size`, `batch_size`, `epochs`, `early_stopping_patience`, `base_filters`, `optimizer`, `loss` (différent selon l'algorithme).
-- **Metrics** par epoch : la loss native de l'algorithme (train/val) + la métrique croisée de l'autre critère (train/val), pour comparaison directe.
-- **Artifacts** : courbes d'apprentissage et reconstructions avant/après, par algorithme — nommés avec le `run_id` pour éviter toute collision (`curves_{run_id}.png`, etc.).
+Même convention que le reste du projet (SQLite locale, `mlflow/mlflow.db`). **Un run MLflow distinct par algorithme réellement entraîné.**
 
 ```python
 MLFLOW_TRACKING_URI = "sqlite:///mlflow/mlflow.db"
@@ -378,119 +339,60 @@ EXPERIMENT_NAME = "bottle_autoencoder"
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 mlflow.set_experiment(EXPERIMENT_NAME)
 
-EPOCHS = 30          # nombre maximum d'epochs
-PATIENCE = 5         # arrêt anticipé si val_loss ne s'améliore plus pendant PATIENCE epochs
+EPOCHS = 30
+PATIENCE = 5
 ```
 
 ---
 
 ## 12. Algorithme A — Entraînement (perte MSE)
 
-`loss="mse"`, SSIM suivie comme métrique croisée.
+*(Ignoré si `RUN_FULL_COMPARISON=False`.)*
 
 ```python
-early_stopping_mse = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss", patience=PATIENCE, restore_best_weights=True,
-)
+if RUN_FULL_COMPARISON:
+    early_stopping_mse = tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)
+    model_mse.compile(optimizer="adam", loss="mse", metrics=[ssim_metric])
 
-model_mse.compile(optimizer="adam", loss="mse", metrics=[ssim_metric])
-
-with mlflow.start_run(run_name="conv_autoencoder_mse") as run_mse:
-    mlflow.log_params({
-        "img_size": IMG_SIZE, "batch_size": BATCH_SIZE, "epochs": EPOCHS,
-        "early_stopping_patience": PATIENCE, "base_filters": 32,
-        "optimizer": "adam", "loss": "mse",
-    })
-
-    history_mse = model_mse.fit(
-        train_ds_xy, validation_data=val_ds_xy,
-        epochs=EPOCHS, callbacks=[early_stopping_mse], verbose=2,
-    )
-
-    epochs_trained_mse = len(history_mse.history["loss"])
-    mlflow.log_param("epochs_trained", epochs_trained_mse)
-
-    for epoch in range(epochs_trained_mse):
-        mlflow.log_metrics({
-            "train_loss": history_mse.history["loss"][epoch],
-            "val_loss": history_mse.history["val_loss"][epoch],
-            "train_ssim": history_mse.history["ssim"][epoch],
-            "val_ssim": history_mse.history["val_ssim"][epoch],
-        }, step=epoch)
-
-    run_id_mse = run_mse.info.run_id
+    with mlflow.start_run(run_name="conv_autoencoder_mse") as run_mse:
+        mlflow.log_params({...})
+        history_mse = model_mse.fit(train_ds_xy, validation_data=val_ds_xy, epochs=EPOCHS, callbacks=[early_stopping_mse], verbose=2)
+        epochs_trained_mse = len(history_mse.history["loss"])
+        mlflow.log_param("epochs_trained", epochs_trained_mse)
+        for epoch in range(epochs_trained_mse):
+            mlflow.log_metrics({...}, step=epoch)
+        run_id_mse = run_mse.info.run_id
 ```
 
 ---
 
 ## 13. Algorithme A — Courbes d'apprentissage (MSE)
 
-- **Loss (MSE)** : doit décroître sur train et validation.
-- **SSIM (métrique croisée)** : doit croître vers 1.0 — permet de voir si optimiser directement le MSE améliore aussi la similarité structurelle, ou si les deux critères divergent.
-
-```python
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-axes[0].plot(history_mse.history["loss"], label="train")
-axes[0].plot(history_mse.history["val_loss"], label="validation")
-axes[0].set_title("Loss (MSE) — Algorithme MSE")
-axes[1].plot(history_mse.history["ssim"], label="train")
-axes[1].plot(history_mse.history["val_ssim"], label="validation")
-axes[1].set_title("SSIM (métrique croisée) — Algorithme MSE")
-
-with mlflow.start_run(run_id=run_id_mse):
-    mlflow.log_figure(fig, f"curves_{run_id_mse}.png")
-```
+*(Ignoré si `RUN_FULL_COMPARISON=False`.)* Loss (MSE) train/val + SSIM (métrique croisée) train/val, mêmes conventions que précédemment.
 
 ---
 
 ## 14. Algorithme A — Reconstruction avant / après entraînement
 
-Même batch de validation (`x_val_fixed`) que la capture "avant entraînement" de la section 10 — comparaison directe de l'écart apporté par l'entraînement sur la perte MSE. Rendu en 3 lignes : original / avant entraînement / après entraînement.
-
-```python
-recon_mse_after = model_mse(x_val_fixed)
-# ... affichage 3 lignes (original, avant, après) — voir notebook ...
-
-with mlflow.start_run(run_id=run_id_mse):
-    mlflow.log_figure(fig, f"reconstructions_before_after_{run_id_mse}.png")
-```
+*(Ignoré si `RUN_FULL_COMPARISON=False`.)* Même batch fixe qu'en étape 10, 3 lignes : original / avant / après (perte MSE).
 
 ---
 
 ## 15. Algorithme B — Entraînement (perte SSIM)
 
-`loss=ssim_loss` (1 - SSIM), MSE suivie comme métrique croisée. Même `EPOCHS`/`PATIENCE` que l'algorithme A, pour une comparaison équitable.
+Toujours exécuté (modèle retenu). `loss=ssim_loss` (1 - SSIM), MSE suivie comme métrique croisée.
 
 ```python
-early_stopping_ssim = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss", patience=PATIENCE, restore_best_weights=True,
-)
-
+early_stopping_ssim = tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)
 model_ssim.compile(optimizer="adam", loss=ssim_loss, metrics=[mse_metric])
 
 with mlflow.start_run(run_name="conv_autoencoder_ssim") as run_ssim:
-    mlflow.log_params({
-        "img_size": IMG_SIZE, "batch_size": BATCH_SIZE, "epochs": EPOCHS,
-        "early_stopping_patience": PATIENCE, "base_filters": 32,
-        "optimizer": "adam", "loss": "ssim_loss (1 - SSIM)",
-    })
-
-    history_ssim = model_ssim.fit(
-        train_ds_xy, validation_data=val_ds_xy,
-        epochs=EPOCHS, callbacks=[early_stopping_ssim], verbose=2,
-    )
-
+    mlflow.log_params({..., "loss": "ssim_loss (1 - SSIM)"})
+    history_ssim = model_ssim.fit(train_ds_xy, validation_data=val_ds_xy, epochs=EPOCHS, callbacks=[early_stopping_ssim], verbose=2)
     epochs_trained_ssim = len(history_ssim.history["loss"])
     mlflow.log_param("epochs_trained", epochs_trained_ssim)
-
     for epoch in range(epochs_trained_ssim):
-        mlflow.log_metrics({
-            "train_loss": history_ssim.history["loss"][epoch],
-            "val_loss": history_ssim.history["val_loss"][epoch],
-            "train_mse": history_ssim.history["mse"][epoch],
-            "val_mse": history_ssim.history["val_mse"][epoch],
-        }, step=epoch)
-
+        mlflow.log_metrics({...}, step=epoch)
     run_id_ssim = run_ssim.info.run_id
 ```
 
@@ -498,70 +400,30 @@ with mlflow.start_run(run_name="conv_autoencoder_ssim") as run_ssim:
 
 ## 16. Algorithme B — Courbes d'apprentissage (SSIM)
 
-- **Loss (1 - SSIM)** : doit décroître (donc SSIM croît vers 1.0) sur train et validation.
-- **MSE (métrique croisée)** : à surveiller — optimiser SSIM ne garantit pas de minimiser le MSE, les deux courbes peuvent diverger, c'est justement ce que cette comparaison doit révéler.
-
-```python
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-axes[0].plot(history_ssim.history["loss"], label="train")
-axes[0].plot(history_ssim.history["val_loss"], label="validation")
-axes[0].set_title("Loss (1 - SSIM) — Algorithme SSIM")
-axes[1].plot(history_ssim.history["mse"], label="train")
-axes[1].plot(history_ssim.history["val_mse"], label="validation")
-axes[1].set_title("MSE (métrique croisée) — Algorithme SSIM")
-
-with mlflow.start_run(run_id=run_id_ssim):
-    mlflow.log_figure(fig, f"curves_{run_id_ssim}.png")
-```
+Toujours exécuté. Loss (1 - SSIM) train/val + MSE (métrique croisée) train/val.
 
 ---
 
 ## 17. Algorithme B — Reconstruction avant / après entraînement
 
-Même batch de validation fixe, même mise en page que pour l'algorithme A (section 14) — comparaison directe possible entre les deux algorithmes (section 18).
-
-```python
-recon_ssim_after = model_ssim(x_val_fixed)
-# ... affichage 3 lignes (original, avant, après) — voir notebook ...
-
-with mlflow.start_run(run_id=run_id_ssim):
-    mlflow.log_figure(fig, f"reconstructions_before_after_{run_id_ssim}.png")
-```
+Toujours exécuté. Même mise en page que l'étape 14, pour le modèle SSIM.
 
 ---
 
 ## 18. Comparaison des deux algorithmes
 
-Les deux modèles reconstruisent les **mêmes images de validation** — comparaison directe de l'effet du choix de la loss sur la qualité perçue de la reconstruction, et sur les métriques finales.
+*(Ignoré si `RUN_FULL_COMPARISON=False` — pas de modèle MSE à comparer.)*
 
-```python
-# ... affichage 3 lignes : original / après MSE / après SSIM — voir notebook ...
-
-print("Résumé final :")
-print(f"  MSE  — {epochs_trained_mse} epochs — val_loss(MSE)={history_mse.history['val_loss'][-1]:.5f} — val_ssim={history_mse.history['val_ssim'][-1]:.4f}")
-print(f"  SSIM — {epochs_trained_ssim} epochs — val_loss(1-SSIM)={history_ssim.history['val_loss'][-1]:.5f} — val_mse={history_ssim.history['val_mse'][-1]:.5f}")
-```
-
-**Lecture** : le "Résumé final" permet de comparer les deux algorithmes sur des critères croisés — ex. le modèle SSIM peut afficher un `val_mse` plus bas que le modèle MSE lui-même, ce qui n'est pas garanti a priori (optimiser une loss n'optimise pas forcément l'autre) mais peut arriver si les deux critères sont globalement alignés sur ce dataset.
+Les deux modèles reconstruisent les mêmes images de validation ; résumé final avec les métriques croisées des deux runs (`val_loss`/`val_ssim` pour MSE, `val_loss`/`val_mse` pour SSIM).
 
 ---
 
-## 19. Score d'anomalie et calibration du seuil (comparaison MSE vs SSIM)
+## 19. Score d'anomalie et calibration du seuil
 
-Même principe que précédemment (score = erreur de reconstruction MSE par image, seuil calibré uniquement sur `val_ds`), appliqué **séparément aux deux modèles entraînés**, pour voir si le choix de la loss d'entraînement change la capacité de discrimination saines/défauts du score d'anomalie.
+Score = erreur de reconstruction MSE par image, seuil calibré uniquement sur `val_ds`. Deux critères de seuil en parallèle : **percentile** (p95) et **moyenne + K·écart-type** (K=3, règle "3-sigma"). Le dict `models` s'adapte à `RUN_FULL_COMPARISON` :
 
 ```python
-def reconstruction_errors(dataset, model):
-    errors = []
-    for batch in dataset:
-        recon = model(batch)
-        err = tf.reduce_mean(tf.square(batch - recon), axis=[1, 2, 3])
-        errors.append(err.numpy())
-    return np.concatenate(errors)
-
-THRESHOLD_PERCENTILE = 95
-models = {"MSE": (model_mse, run_id_mse), "SSIM": (model_ssim, run_id_ssim)}
-scores, thresholds, recalls, fprs = {}, {}, {}, {}
+models = {"MSE": (model_mse, run_id_mse), "SSIM": (model_ssim, run_id_ssim)} if RUN_FULL_COMPARISON else {"SSIM": (model_ssim, run_id_ssim)}
 
 for name, (model, rid) in models.items():
     val_scores = reconstruction_errors(val_ds, model)
@@ -569,81 +431,146 @@ for name, (model, rid) in models.items():
     test_defect_scores = np.concatenate([reconstruction_errors(ds, model) for ds in test_defect_ds.values()])
 
     threshold = np.percentile(val_scores, THRESHOLD_PERCENTILE)
-    recall = (test_defect_scores > threshold).mean()
-    fpr = (test_good_scores > threshold).mean()
-
-    scores[name] = {"val": val_scores, "good": test_good_scores, "defect": test_defect_scores}
-    thresholds[name], recalls[name], fprs[name] = threshold, recall, fpr
-
-    with mlflow.start_run(run_id=rid):
-        mlflow.log_metrics({"threshold_p95": threshold, "recall_p95": recall, "fpr_p95": fpr})
+    threshold_std = val_scores.mean() + K_STD * val_scores.std()
+    # ... rappel/FP pour les deux critères, log MLflow ...
 ```
+
+Toutes les cellules de rendu qui suivent (histogrammes, sweep de percentiles) itèrent sur `models.keys()` — un seul panneau si `RUN_FULL_COMPARISON=False`, deux sinon.
 
 ### Vérification de la généralisation du seuil : `val` vs `test/good`
 
-Le seuil est calibré sur `val_scores` (saines de validation) puis appliqué à `test_good_scores` (saines de test) et `test_defect_scores`. Pour que ça marche, il faut que **`val_scores` et `test_good_scores` suivent une distribution similaire** — ce sont deux échantillons de la même population ("images saines"), juste des images différentes.
+Si les deux distributions diffèrent nettement, le seuil calibré sur `val` ne se généralise pas bien à `test/good` — observé pour MSE (35-40 % de FP au lieu de ~5 %), pas pour SSIM.
 
-Si les deux distributions diffèrent nettement (décalage, forme différente), le seuil calibré sur `val` ne se généralise pas bien à `test/good` — signe d'une instabilité du score d'anomalie pour l'algorithme concerné, indépendante de la taille du split de validation (à vérifier en premier avant d'incriminer un échantillon trop petit).
+### Rendu visuel — histogrammes saines vs défauts
 
-```python
-fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
-for ax, name in zip(axes, ["MSE", "SSIM"]):
-    val_s, good_s, threshold = scores[name]["val"], scores[name]["good"], thresholds[name]
-    ax.hist(val_s, alpha=0.6, label="val (calibration)")
-    ax.hist(good_s, alpha=0.6, label="test/good (application)")
-    ax.axvline(threshold, color="black", linestyle="--", label=f"seuil (p{THRESHOLD_PERCENTILE})")
-    ax.set_title(f"Algorithme {name} — val vs test/good")
+Un panneau par algorithme présent dans `models`, avec les deux seuils (percentile et moyenne+K·std) superposés.
 
-with mlflow.start_run(run_id=run_id_mse):
-    mlflow.log_figure(fig, f"val_vs_test_good_{run_id_mse}.png")
+### Abaisser le seuil augmente le rappel
 
-# Écart quantifié entre les deux distributions (moyenne et p95), par algorithme
-for name in ["MSE", "SSIM"]:
-    val_s, good_s = scores[name]["val"], scores[name]["good"]
-    print(f"[{name}] mean(val)={val_s.mean():.5f}  mean(test/good)={good_s.mean():.5f}  "
-          f"écart={100*(good_s.mean()-val_s.mean())/val_s.mean():+.1f}%")
-```
+Balayage de percentiles (50 à 99), rappel et faux positifs en fonction du seuil, `threshold_sweep` stocké pour réutilisation en étape 22 (pas de recalcul).
 
-### Rendu visuel — histogrammes saines vs défauts, un panneau par algorithme
-
-```python
-fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
-for ax, name in zip(axes, ["MSE", "SSIM"]):
-    good, defect, threshold = scores[name]["good"], scores[name]["defect"], thresholds[name]
-    ax.hist(good, alpha=0.6, label="test/good (saines)")
-    ax.hist(defect, alpha=0.6, label="test/<defect> (défauts)")
-    ax.axvline(threshold, color="black", linestyle="--")
-    ax.set_title(f"Algorithme {name} — rappel={recalls[name]:.0%}, FP={fprs[name]:.0%}")
-```
-
-### Abaisser le seuil augmente le rappel — comparaison des deux algorithmes
-
-Rendu distinct : rappel et taux de faux positifs en fonction du seuil (balayage de percentiles), **une courbe par algorithme** — permet de voir directement si un algorithme offre un meilleur compromis rappel/faux-positifs que l'autre, à n'importe quel seuil.
-
-```python
-percentiles = np.arange(50, 100, 2)
-fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
-
-for name, color in [("MSE", "#4C72B0"), ("SSIM", "#DD8452")]:
-    val_scores, good, defect = scores[name]["val"], scores[name]["good"], scores[name]["defect"]
-    recall_curve = [(defect > np.percentile(val_scores, p)).mean() for p in percentiles]
-    fpr_curve = [(good > np.percentile(val_scores, p)).mean() for p in percentiles]
-    axes[0].plot(percentiles, recall_curve, marker="o", label=name, color=color)
-    axes[1].plot(percentiles, fpr_curve, marker="o", label=name, color=color)
-
-with mlflow.start_run(run_id=run_id_mse):
-    mlflow.log_figure(fig, f"recall_vs_threshold_comparison_{run_id_mse}.png")
-```
-
-**Lecture** : pour les deux algorithmes, le rappel augmente quand on abaisse le seuil, au prix de plus de faux positifs — pas de seuil "gratuit". Si une courbe domine l'autre (meilleur rappel pour un même taux de faux positifs), l'algorithme correspondant offre un meilleur score d'anomalie intrinsèque. Le choix final du seuil dépend ensuite du coût métier relatif d'un défaut manqué vs d'une fausse alerte (cf. `etude_desequilibre_classe.md`).
+**Lecture** : le rappel augmente quand on abaisse le seuil, au prix de plus de faux positifs — pas de seuil "gratuit". Si une courbe domine l'autre, l'algorithme correspondant offre un meilleur score d'anomalie intrinsèque.
 
 ---
 
-## 20. Prochaine étape
+## 21. Heatmaps & évaluation
 
-Le seuil calibré ici (p95 des scores de validation) est un point de départ raisonnable, pas une valeur définitive, pour l'un ou l'autre algorithme. Pistes de suite :
-- Choisir l'algorithme (MSE ou SSIM) qui domine sur la courbe rappel/faux-positifs (section 19), plutôt que d'en présupposer un a priori.
-- Ajuster le percentile de calibration selon le coût métier réel d'un faux positif vs d'un faux négatif.
-- Si le taux de faux positifs observé s'écarte fortement de l'objectif visé par le percentile de calibration (ex. 35-40 % au lieu de ~5 %), vérifier d'abord la généralisation `val` vs `test/good` (section 19) et envisager d'agrandir `VAL_FRACTION` ou de passer en k-fold avant d'ajuster le seuil lui-même.
-- Évaluer avec des métriques agrégées indépendantes du seuil (AUC-ROC, AUC-PR) plutôt qu'à un seul point de fonctionnement.
-- Passer à un score pixel-level (carte d'erreur de reconstruction par pixel) pour localiser le défaut, en s'appuyant sur `ground_truth/` (IoU, AUC-ROC pixel) — cf. étude de déséquilibre pixel-level en étape 3.11.
+Descend au niveau pixel : **carte d'erreur** (heatmap) pour localiser le défaut, puis évaluation quantitative à deux échelles.
+
+### Carte d'erreur par pixel (heatmap)
+
+```python
+def error_heatmap(original, reconstruction):
+    return tf.reduce_mean(tf.square(original - reconstruction), axis=-1)
+```
+
+Rendu `original | reconstruction | heatmap | masque ground-truth`, un exemple par classe de défaut. L'appel pour MSE est conditionné par `RUN_FULL_COMPARISON` ; SSIM toujours affiché.
+
+### Métriques agrégées indépendantes du seuil (AUC-ROC, AUC-PR)
+
+- **AUC-ROC** : déjà vue en étape 19-20.
+- **AUC-PR** : plus informative que l'AUC-ROC quand la classe positive est minoritaire — **pertinente surtout au niveau pixel** (pixels "défaut" rares, ~85-99 % de fond, cf. étude 3.11). Un classifieur aléatoire obtient un AUC-PR proche de la prévalence de la classe positive — à comparer, pas à lire en absolu.
+
+```python
+auroc_image[name] = roc_auc_score(y_true_img, y_score_img)
+aucpr_image[name] = average_precision_score(y_true_img, y_score_img)
+# niveau pixel : mêmes fonctions sur les heatmaps/masques concaténés (tous les pixels, toutes les images de test)
+auroc_pixel[name] = roc_auc_score(all_masks.flatten(), all_heatmaps.flatten())
+aucpr_pixel[name] = average_precision_score(all_masks.flatten(), all_heatmaps.flatten())
+```
+
+**Rendu — diagrammes** : courbes ROC et Precision-Recall (niveau image) côte à côte, une couleur par algorithme présent dans `models`.
+
+### Effet du passage à un score pixel-level : localisation via IoU
+
+Les métriques image-level répondent à "l'image est-elle défectueuse ?", pas à "où est le défaut ?". On calibre un **seuil pixel** (percentile des pixels de `val_ds`), on binarise la heatmap pour obtenir un **masque de segmentation prédit**, comparé au masque réel via l'**IoU**.
+
+```python
+def iou_score(pred_mask, true_mask):
+    intersection = np.logical_and(pred_mask, true_mask).sum()
+    union = np.logical_or(pred_mask, true_mask).sum()
+    return intersection / union if union > 0 else 1.0
+
+PIXEL_THRESHOLD_PERCENTILE = 99
+for name, (model, rid) in models.items():
+    val_heatmaps, _ = collect_pixel_arrays(model, val_ds)
+    pixel_threshold = np.percentile(val_heatmaps.flatten(), PIXEL_THRESHOLD_PERCENTILE)
+    # ... IoU par image défectueuse, moyenne, log MLflow ...
+```
+
+**Rendu** : segmentation prédite vs masque réel, meilleur/pire exemple, par algorithme.
+
+**Synthèse image-level vs pixel-level** : les deux échelles se complètent — un score élevé à l'un ne garantit pas un score élevé à l'autre. Pour localiser (pas seulement détecter), l'IoU pixel-level est la métrique qui compte.
+
+### Matrice de confusion (au seuil calibré)
+
+Au seuil percentile (p95), une image est classée "défectueuse" si son score dépasse le seuil — une matrice par algorithme présent dans `models`.
+
+### Analyse des ratés
+
+Défauts manqués (faux négatifs) et fausses alertes (faux positifs), jusqu'à 3 exemples de chaque, par algorithme. **Lecture** : les défauts manqués sont typiquement les plus petits/peu contrastés (cohérent avec l'étude de déséquilibre pixel-level, étape 3.11 — `broken_small`). Les fausses alertes viennent souvent d'images saines atypiques, peu vues à l'entraînement.
+
+---
+
+## 22. Décision finale : modèle retenu, seuil ajusté et IoU par image
+
+**Modèle retenu : algorithme SSIM.** Justification, à partir des métriques déjà calculées (pas de nouvel entraînement) :
+- Étape 19 (p95) : rappel comparable, mais FP proches de la cible pour SSIM (~5-10 %) contre 4 à 8x supérieurs pour MSE (35-40 %).
+- Étape 19 (généralisation `val` vs `test/good`) : la distribution SSIM se transporte correctement ; celle de MSE non.
+- Étape 21 (AUC-ROC/AUC-PR, IoU) : cohérent avec ce qui précède.
+
+Le reste de cette section ne relance **aucun entraînement** ni recalcul de reconstruction — réutilise `scores["SSIM"]`, `pixel_data["SSIM"]` et `threshold_sweep["SSIM"]` déjà en mémoire.
+
+### Ajustement du percentile de calibration
+
+Plutôt que le p95 par défaut (arbitraire), on sélectionne le percentile qui **maximise l'indice de Youden** (`rappel - faux positifs`) sur le balayage déjà calculé :
+
+```python
+sweep = threshold_sweep["SSIM"]
+youden = sweep["recall"] - sweep["fpr"]
+best_idx = int(np.argmax(youden))
+FINAL_PERCENTILE = int(sweep["percentiles"][best_idx])
+final_threshold_image = np.percentile(scores["SSIM"]["val"], FINAL_PERCENTILE)
+```
+
+### Seuil de segmentation pixel et IoU par image (percentile ajusté)
+
+Même principe que l'étape 21, avec `FINAL_PERCENTILE` (au lieu de p99 fixe), **pour chaque image défectueuse individuellement** :
+
+```python
+val_heatmaps_final, _ = collect_pixel_arrays(model_ssim, val_ds)  # seul nouveau passage forward de la section
+pixel_threshold_final = np.percentile(val_heatmaps_final.flatten(), FINAL_PERCENTILE)
+all_heatmaps_final, all_masks_final = pixel_data["SSIM"]  # réutilisé tel quel
+
+iou_rows = []
+for i, (label, heatmap, mask) in enumerate(zip(image_labels, all_heatmaps_final, all_masks_final)):
+    if mask.sum() == 0:
+        continue
+    pred_mask = (heatmap > pixel_threshold_final).astype(np.uint8)
+    iou_rows.append({"index_global": i, "classe_defaut": label, "iou": iou_score(pred_mask, mask)})
+```
+
+Rendu : tableau complet (classe, index, IoU) pour toutes les images défectueuses, moyennes par classe + globale, graphique de dispersion par classe. **Lecture** : la dispersion de l'IoU par classe reflète l'étude de déséquilibre pixel-level (étape 3.11) — `broken_small` tend à avoir un IoU plus bas (zone plus petite, plus sensible à un décalage du masque prédit).
+
+---
+
+## 23. Prochaine étape
+
+Le modèle SSIM et le seuil ajusté (Youden) constituent un point de départ solide, pas une valeur définitive :
+- Valider le percentile de Youden sur un validation set plus grand ou en k-fold.
+- Ajuster le percentile selon le coût métier réel FP vs FN.
+- Post-traitement morphologique (érosion/dilatation, filtrage de petites composantes) sur le masque prédit pour améliorer l'IoU sans changer le modèle.
+- En production, ne réentraîner que SSIM (`RUN_FULL_COMPARISON=False`) — la comparaison complète n'a besoin d'être rejouée qu'en cas de changement de dataset/architecture.
+
+---
+
+## 24. Temps de traitement global
+
+Chronométrage posé en toute première cellule du notebook (`_notebook_start_time = time.time()`), affiché ici :
+
+```python
+_total_elapsed = time.time() - _notebook_start_time
+print(f"Temps total d'exécution du notebook : {_total_elapsed:.1f} s  ({_total_elapsed/60:.1f} min)")
+```
+
+Un chronométrage local est également posé autour de la section 22 (calibration + IoU par image), affiché séparément — sur ce dataset, cette section prend typiquement moins d'une seconde (aucun nouveau passage forward significatif, tout est réutilisé). Le gain principal de `RUN_FULL_COMPARISON=False` vient de l'entraînement (un seul modèle au lieu de deux) : ~35 % de temps total en moins observé sur ce dataset.

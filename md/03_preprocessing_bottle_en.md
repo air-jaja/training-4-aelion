@@ -1,6 +1,6 @@
 # Full `bottle` Pipeline — Preprocessing + Convolutional Autoencoder (Anomaly Detection, MVTec-AD)
 
-Two-part document: **Part 1** (Context through section 6) covers data preprocessing; **Part 2** (sections 7 to 17) covers designing, training, and MLflow-tracking the convolutional autoencoder. Associated notebook: `pipeline_bottle_full.ipynb`.
+Two-part document: **Part 1** (Context through section 6) covers data preprocessing; **Part 2** (sections 7 to 24) covers designing, training, and MLflow-tracking the convolutional autoencoder. Associated notebook: `pipeline_bottle_full.ipynb`.
 
 ## Context
 
@@ -180,12 +180,18 @@ Augmentation (Albumentations) is applied **on the fly** in the `tf.data` pipelin
 
 ## 6. Transition to Part 2
 
-The preprocessing above produces `train_ds`, `val_ds`, `test_good_ds`, `test_defect_ds`, and `test_defect_masks`, ready to use. Part 2 (sections 7 to 17) reuses them directly to design, train, and evaluate a convolutional autoencoder.
+The preprocessing above produces `train_ds`, `val_ds`, `test_good_ds`, `test_defect_ds`, and `test_defect_masks`, ready to use. Part 2 (sections 7 to 24) reuses them directly to design, train, and evaluate a convolutional autoencoder.
 
 ---
 
 # Part 2 — Convolutional Autoencoder
 
+Reuses `train_ds` and `val_ds` built at step 3.9 directly (already normalized `[0,1]`, `train_ds` with augmentation, `val_ds` without), along with `IMG_SIZE`/`BATCH_SIZE` defined in configuration. No data reloading here.
+
+```python
+from tensorflow.keras import layers, Model
+import mlflow
+```
 
 ---
 
@@ -193,237 +199,378 @@ The preprocessing above produces `train_ds`, `val_ds`, `test_good_ds`, `test_def
 
 A convolutional autoencoder has two symmetric halves:
 
-- **Encoder**: progressively reduces spatial resolution (`strides=2` or `MaxPooling2D`) while increasing the number of filters — trading spatial information for semantic information.
-- **Bottleneck**: the most compact representation, at the middle of the network. This is the constraint that forces the model to learn a structure of "normal" rather than simply copying the image (without a bottleneck, the network could learn the identity function and the reconstruction error would no longer be informative).
-- **Decoder**: exact mirror (`Conv2DTranspose` or `UpSampling2D` + `Conv2D`), going back up in resolution until the original image size and channel count are recovered.
+- **Encoder**: progressively reduces spatial resolution (`strides=2`) while increasing the number of filters — trading spatial information for semantic information.
+- **Bottleneck**: the most compact representation, at the middle of the network — the constraint that forces the model to learn a structure of "normal" rather than simply copying the image.
+- **Decoder**: exact mirror (`Conv2DTranspose`), goes back up in resolution to recover the original image size and channel count.
 
----
-
-## 8. Example implementation (Keras, Functional API)
+**Design choices made here**:
+- `strides=2` instead of `MaxPooling2D`: strided convolution learns how to downsample itself.
+- Filters double at each encoder stage (32→64→128→256): compensates for spatial resolution loss with more representational capacity.
+- `padding="same"` everywhere: simplifies shape computation, guarantees encoder/decoder symmetry.
+- `sigmoid` output activation: consistent with the pipeline's `[0,1]` normalization.
 
 ```python
-from tensorflow.keras import layers, Model
-
-def build_autoencoder(img_size=128, base_filters=32):
+def build_autoencoder(img_size: int = IMG_SIZE, base_filters: int = 32) -> Model:
     inputs = layers.Input(shape=(img_size, img_size, 3), name="input_image")
 
-    # Encoder: progressive downsampling
-    x = layers.Conv2D(base_filters,     3, strides=2, padding="same", activation="relu", name="enc_conv1")(inputs)  # 128->64
-    x = layers.Conv2D(base_filters * 2, 3, strides=2, padding="same", activation="relu", name="enc_conv2")(x)       # 64->32
-    x = layers.Conv2D(base_filters * 4, 3, strides=2, padding="same", activation="relu", name="enc_conv3")(x)       # 32->16
-    x = layers.Conv2D(base_filters * 8, 3, strides=2, padding="same", activation="relu", name="enc_conv4")(x)       # 16->8
+    # --- Encoder ---
+    x = layers.Conv2D(base_filters,     3, strides=2, padding="same", activation="relu", name="enc_conv1")(inputs)
+    x = layers.Conv2D(base_filters * 2, 3, strides=2, padding="same", activation="relu", name="enc_conv2")(x)
+    x = layers.Conv2D(base_filters * 4, 3, strides=2, padding="same", activation="relu", name="enc_conv3")(x)
+    x = layers.Conv2D(base_filters * 8, 3, strides=2, padding="same", activation="relu", name="enc_conv4")(x)
 
-    latent = x  # bottleneck: (8, 8, 256)
+    latent = x  # bottleneck
 
-    # Decoder: symmetric upsampling
-    x = layers.Conv2DTranspose(base_filters * 4, 3, strides=2, padding="same", activation="relu", name="dec_conv1")(latent)  # 8->16
-    x = layers.Conv2DTranspose(base_filters * 2, 3, strides=2, padding="same", activation="relu", name="dec_conv2")(x)       # 16->32
-    x = layers.Conv2DTranspose(base_filters,     3, strides=2, padding="same", activation="relu", name="dec_conv3")(x)       # 32->64
-    outputs = layers.Conv2DTranspose(3, 3, strides=2, padding="same", activation="sigmoid", name="dec_output")(x)            # 64->128
+    # --- Decoder ---
+    x = layers.Conv2DTranspose(base_filters * 4, 3, strides=2, padding="same", activation="relu", name="dec_conv1")(latent)
+    x = layers.Conv2DTranspose(base_filters * 2, 3, strides=2, padding="same", activation="relu", name="dec_conv2")(x)
+    x = layers.Conv2DTranspose(base_filters,     3, strides=2, padding="same", activation="relu", name="dec_conv3")(x)
+    outputs = layers.Conv2DTranspose(3, 3, strides=2, padding="same", activation="sigmoid", name="dec_output")(x)
 
     return Model(inputs, outputs, name="conv_autoencoder")
+
+
+autoencoder = build_autoencoder()
 ```
+
+### Key bottleneck information
+
+Before reading the full `summary()`, we isolate the information that characterizes the bottleneck itself.
+
+```python
+bottleneck_layer_name = "enc_conv4"
+bottleneck_layer = autoencoder.get_layer(bottleneck_layer_name)
+bottleneck_shape = bottleneck_layer.output.shape[1:]
+input_shape = autoencoder.input.shape[1:]
+
+bottleneck_values = int(np.prod(bottleneck_shape))
+input_values = int(np.prod(input_shape))
+spatial_reduction = input_shape[0] // bottleneck_shape[0]
+compression_ratio = input_values / bottleneck_values
+
+print(f"Bottleneck layer          : {bottleneck_layer_name}")
+print(f"Bottleneck shape           : {tuple(bottleneck_shape)}  ({bottleneck_values} values)")
+print(f"Spatial reduction         : ÷{spatial_reduction} in height and width")
+print(f"Compression ratio         : {compression_ratio:.2f}x")
+```
+
+On this model (`128×128×3`, `base_filters=32`): bottleneck `enc_conv4` = `(8, 8, 256)`, spatial reduction ÷16, compression ratio 3.00x.
 
 ---
 
-## 9. Design choices to justify
+## 8. Reading the `summary()`
 
-| Choice | Why |
-|---|---|
-| `strides=2` instead of `MaxPooling2D` | Strided convolution learns how to downsample itself, rather than a fixed max |
-| Filters double at each encoder stage (32→64→128→256) | Compensates for the loss of spatial resolution with more representational capacity |
-| `padding="same"` everywhere | Simplifies shape computation, guarantees exact encoder/decoder symmetry |
-| `sigmoid` output activation | Consistent with the pipeline's `[0,1]` normalization — `tanh`/`linear` would require renormalizing to `[-1,1]` or adjusting the loss |
-| `MeanSquaredError` loss (or `binary_crossentropy`) | No label: the input image is also the target (`fit(x, x)`) |
+**Bottleneck recap** (computed in step 7, shown prominently right before the table): `enc_conv4` carries the smallest `Output Shape` — spot this row first.
 
----
+```python
+print("=" * 60)
+print(f"BOTTLENECK ({bottleneck_layer_name}) — spot it in the summary() below")
+print(f"  Shape             : {tuple(bottleneck_shape)}")
+print(f"  Compression       : {input_values} -> {bottleneck_values} values ({compression_ratio:.2f}x)")
+print("=" * 60)
 
-## 10. Reading the `summary()`
-
-Example output (128×128×3, `base_filters=32`):
-
-```
-Model: "conv_autoencoder"
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
-┃ Layer (type)                    ┃ Output Shape           ┃       Param # ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
-│ input_image (InputLayer)        │ (None, 128, 128, 3)    │             0 │
-│ enc_conv1 (Conv2D)              │ (None, 64, 64, 32)     │           896 │
-│ enc_conv2 (Conv2D)              │ (None, 32, 32, 64)     │        18,496 │
-│ enc_conv3 (Conv2D)              │ (None, 16, 16, 128)    │        73,856 │
-│ enc_conv4 (Conv2D)              │ (None, 8, 8, 256)      │       295,168 │
-│ dec_conv1 (Conv2DTranspose)     │ (None, 16, 16, 128)    │       295,040 │
-│ dec_conv2 (Conv2DTranspose)     │ (None, 32, 32, 64)     │        73,792 │
-│ dec_conv3 (Conv2DTranspose)     │ (None, 64, 64, 32)     │        18,464 │
-│ dec_output (Conv2DTranspose)    │ (None, 128, 128, 3)    │           867 │
-└─────────────────────────────────┴────────────────────────┴───────────────┘
- Total params: 776,579 (2.96 MB)
+autoencoder.summary()
 ```
 
-### Columns
-
-- **Layer (type)**: the given name (`name=...`) + Keras layer type.
-- **Output Shape**: `(None, H, W, C)` — `None` is the batch size (variable). Check here that downsampling/upsampling behaves as expected (`128→64→32→16→8` then `8→16→32→64→128`).
-- **Param #**: number of trainable weights. For a `Conv2D`:
-  ```
-  params = (kernel_h × kernel_w × in_channels + 1) × out_channels
-  ```
-  The `+1` is the per-filter bias. Check: `enc_conv1` = `(3×3×3 + 1) × 32 = 896`; `enc_conv2` = `(3×3×32 + 1) × 64 = 18,496`.
-- **Total params**: sum across all layers, with a memory equivalent (weights in `float32` → `total × 4 bytes`).
-- **Trainable / Non-trainable**: everything is trainable here; non-trainable layers would appear with a frozen pretrained encoder (`layer.trainable = False`).
-
-### Points to check systematically
-
-1. **Last layer's Output Shape == input's Output Shape** — necessary condition to compare the reconstruction to the original pixel by pixel.
-2. **Symmetry of parameter counts** between encoder and decoder — a marked imbalance often signals a poorly sized bottleneck.
-3. **Total params vs training data volume**: worth comparing (e.g. 776k parameters for 177 images is a tight ratio, risk of overfitting — reduce `base_filters` or strengthen regularization if validation loss plateaus/increases).
+Points to check systematically:
+1. **Last layer's Output Shape == input's Output Shape**.
+2. **`Conv2D` Param #**: `(kernel_h × kernel_w × in_channels + 1) × out_channels`.
+3. **Symmetry of parameter counts** between encoder and decoder.
+4. **Total params vs data volume**.
 
 ### Compression ratio
 
-The bottleneck isn't judged by parameter count alone — what matters for anomaly detection is how many **values** are needed to represent an image once it has passed through the encoder, compared to the number of values in the original image:
-
-```
-compression ratio = (nb of input values) / (nb of values in the latent)
-                   = (H × W × C input) / (H' × W' × C' latent)
-```
-
-For this model (`128×128×3` → bottleneck `8×8×256`):
-
-```python
-input_values = 128 * 128 * 3    # 49,152
-latent_values = 8 * 8 * 256     # 16,384
-ratio = input_values / latent_values   # 3.0x
-```
-
-**Reading it**: a high ratio (very compact bottleneck) forces the model to learn a more abstract representation of "normal" — useful for anomaly detection, but risks underfitting (degraded reconstruction even on normal images) if the ratio is too aggressive. Too low a ratio (bottleneck almost as large as the input) risks letting the model learn a near-identity mapping instead, which is uninformative for distinguishing normal from defective. A 3x ratio here is moderate — adjust (`base_filters`, number of stages) depending on whether reconstruction underfits or overfits in practice.
+What matters is how many **values** are needed to represent an image once encoded, compared to the original — already computed in step 7, reshown here in context. A high ratio forces a more abstract representation (risk of underfitting if too aggressive); too low a ratio risks a near-identity mapping.
 
 ---
 
-## 11. Checking a real batch from the pipeline
-
-Before compiling and training, run a real batch from `train_ds` through the model (weights still random at this stage) to confirm shapes flow correctly end to end:
+## 9. Checking a real batch from the pipeline
 
 ```python
 for batch in train_ds.take(1):
     reconstruction = autoencoder(batch)
-    print("Input batch:", batch.shape)
-    print("Reconstruction:", reconstruction.shape)
-
     mse = tf.keras.losses.MeanSquaredError()
     print("MSE (random weights, before any training):", float(mse(batch, reconstruction)))
 ```
 
-**What to check**: `reconstruction.shape == batch.shape` (otherwise the loss can't be computed), and a non-zero but not aberrant MSE (random weights → uninformative reconstruction, expected at this stage — the value only becomes meaningful after training, see section 15).
+Visual preview (input vs reconstruction, random weights — uninformative, just confirms the pipeline works).
 
 ---
 
-## 12. Compilation (MSE + SSIM)
+## 10. Two algorithms to compare: MSE loss vs SSIM loss
 
-No label: the input image is also the target (`fit(x, x)`, target = input = reconstruction).
+So far, SSIM was only a **tracked metric** alongside the MSE loss (a single model). To understand the before/after training gap specific to each optimization criterion, we train **two independent models**, same architecture, each optimized on its own loss:
 
-- **Loss = MSE** (`mean_squared_error`): penalizes pixel-by-pixel reconstruction error, drives the optimization.
-- **SSIM** (Structural Similarity Index) tracked as an additional metric, not as the main loss: unlike MSE, it's sensitive to local structure (luminance, contrast, texture) rather than raw pixel-by-pixel difference — closer to how a structural defect would perceptually degrade the reconstruction. Keras has no native SSIM metric, so it's wrapped via `tf.image.ssim`:
+- **Algorithm A**: `loss = MSE` (SSIM still tracked).
+- **Algorithm B**: `loss = 1 - SSIM` (defined explicitly, Keras has no native SSIM loss; MSE still tracked).
+
+**Control flag: `RUN_FULL_COMPARISON`** — `True` the first time (or after any dataset/architecture change) to replay the full MSE vs SSIM comparison (sections 10-21). Once the SSIM choice is validated (step 22), switch to `False`: the MSE model is no longer built or trained, all comparison sections adapt automatically (a single panel instead of two on charts), and only the SSIM part (sections 15-17) runs — measured time savings: ~35% on this dataset (see step 24).
 
 ```python
-def ssim_metric(y_true, y_pred):
-    return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))  # max_val=1.0 since images are normalized [0,1]
-
-ssim_metric.__name__ = "ssim"  # name used in history.history and logs
-
-autoencoder.compile(optimizer="adam", loss="mse", metrics=[ssim_metric])
+RUN_FULL_COMPARISON = True  # False to only retrain SSIM
+MODEL_COLORS = {"MSE": "#4C72B0", "SSIM": "#DD8452"}  # consistent colors, used dynamically everywhere
 
 train_ds_xy = train_ds.map(lambda x: (x, x))
 val_ds_xy = val_ds.map(lambda x: (x, x))
-```
 
-- **Optimizer = Adam**: robust default choice for this kind of model, no fine learning-rate tuning needed to get started.
+model_ssim = build_autoencoder(IMG_SIZE)  # retained model: always built
 
----
+if RUN_FULL_COMPARISON:
+    model_mse = build_autoencoder(IMG_SIZE)  # comparison model: only if requested
 
-## 13. MLflow tracking
-
-Same convention as the rest of the project (local SQLite, `mlflow/mlflow.db`):
-
-```python
-import mlflow
-
-mlflow.set_tracking_uri("sqlite:///mlflow/mlflow.db")
-mlflow.set_experiment("bottle_autoencoder")
-```
-
-- **Params** logged once per run (`img_size`, `batch_size`, `epochs`, `base_filters`, `optimizer`, `loss`).
-- **Metrics** logged at every epoch (`train_loss`, `val_loss`, `train_ssim`, `val_ssim`) — allows comparing multiple runs in the MLflow UI (`mlflow ui --backend-store-uri sqlite:///mlflow/mlflow.db`).
-- **Artifacts**: training curves and reconstruction examples, saved as figures attached to the run (`mlflow.log_figure`).
-
----
-
-## 14. Training
-
-```python
-EPOCHS = 30
-
-with mlflow.start_run(run_name="conv_autoencoder_bottle") as run:
-    mlflow.log_params({
-        "img_size": IMG_SIZE, "batch_size": BATCH_SIZE, "epochs": EPOCHS,
-        "base_filters": 32, "optimizer": "adam", "loss": "mse",
-    })
-
-    history = autoencoder.fit(train_ds_xy, validation_data=val_ds_xy, epochs=EPOCHS, verbose=2)
-
-    for epoch in range(len(history.history["loss"])):
-        mlflow.log_metrics({
-            "train_loss": history.history["loss"][epoch],
-            "val_loss": history.history["val_loss"][epoch],
-            "train_ssim": history.history["ssim"][epoch],
-            "val_ssim": history.history["val_ssim"][epoch],
-        }, step=epoch)
-
-    run_id = run.info.run_id
-```
-
-`EPOCHS` deliberately low at first for a quick pipeline sanity check (e.g. 3) — increase once loss and SSIM are confirmed to move in the right direction.
-
----
-
-## 15. Training curves
-
-Two relevant curves to track, each in train **and** validation (the train/validation gap tells you about overfitting):
-
-- **Loss (MSE)**: should decrease on both curves; a `val_loss` that rises while `train_loss` keeps falling signals overfitting.
-- **SSIM**: should increase towards 1.0 (structurally faithful reconstruction); read alongside the loss, not instead of it — the two metrics can diverge slightly (MSE penalizes raw difference, SSIM penalizes structure).
-
-```python
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-axes[0].plot(history.history["loss"], label="train")
-axes[0].plot(history.history["val_loss"], label="validation")
-axes[0].set_title("Loss (MSE)")
-axes[1].plot(history.history["ssim"], label="train")
-axes[1].plot(history.history["val_ssim"], label="validation")
-axes[1].set_title("SSIM")
-
-with mlflow.start_run(run_id=run_id):
-    mlflow.log_figure(fig, "curves.png")
-```
-
----
-
-## 16. Reconstruction examples after training
-
-Visual comparison on a **validation** batch (never seen with augmentation, never used for the training loss): unlike the section 11 preview in the notebook (random weights, before any training), the reconstruction should now resemble the original if training has converged.
-
-```python
 for batch in val_ds_xy.take(1):
-    x_val, _ = batch
-    reconstruction_trained = autoencoder(x_val)
+    x_val_fixed, _ = batch
 
-# ... display original vs reconstruction (see notebook) ...
-
-with mlflow.start_run(run_id=run_id):
-    mlflow.log_figure(fig, "reconstructions.png")
+recon_ssim_before = model_ssim(x_val_fixed)
+if RUN_FULL_COMPARISON:
+    recon_mse_before = model_mse(x_val_fixed)
 ```
 
 ---
 
-## 17. Next step
+## 11. MLflow tracking
 
-Once the MLflow run looks good (decreasing loss, increasing SSIM, visually correct reconstructions on normal images): define an anomaly score (e.g. per-pixel reconstruction error or 1-SSIM) on `test/good` and `test/<defect>`, then evaluate its discriminative power (AUC-ROC, AUC-PR) — see `etude_desequilibre_classe.md` for metric choices suited to the dataset's imbalance.
+Same convention as the rest of the project (local SQLite, `mlflow/mlflow.db`). **One distinct MLflow run per algorithm actually trained.**
+
+```python
+MLFLOW_TRACKING_URI = "sqlite:///mlflow/mlflow.db"
+EXPERIMENT_NAME = "bottle_autoencoder"
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment(EXPERIMENT_NAME)
+
+EPOCHS = 30
+PATIENCE = 5
+```
+
+---
+
+## 12. Algorithm A — Training (MSE loss)
+
+*(Skipped if `RUN_FULL_COMPARISON=False`.)*
+
+```python
+if RUN_FULL_COMPARISON:
+    early_stopping_mse = tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)
+    model_mse.compile(optimizer="adam", loss="mse", metrics=[ssim_metric])
+
+    with mlflow.start_run(run_name="conv_autoencoder_mse") as run_mse:
+        mlflow.log_params({...})
+        history_mse = model_mse.fit(train_ds_xy, validation_data=val_ds_xy, epochs=EPOCHS, callbacks=[early_stopping_mse], verbose=2)
+        epochs_trained_mse = len(history_mse.history["loss"])
+        mlflow.log_param("epochs_trained", epochs_trained_mse)
+        for epoch in range(epochs_trained_mse):
+            mlflow.log_metrics({...}, step=epoch)
+        run_id_mse = run_mse.info.run_id
+```
+
+---
+
+## 13. Algorithm A — Training curves (MSE)
+
+*(Skipped if `RUN_FULL_COMPARISON=False`.)* Loss (MSE) train/val + SSIM (cross-metric) train/val, same conventions as before.
+
+---
+
+## 14. Algorithm A — Reconstruction before / after training
+
+*(Skipped if `RUN_FULL_COMPARISON=False`.)* Same fixed batch as step 10, 3 rows: original / before / after (MSE loss).
+
+---
+
+## 15. Algorithm B — Training (SSIM loss)
+
+Always runs (retained model). `loss=ssim_loss` (1 - SSIM), MSE tracked as a cross-metric.
+
+```python
+early_stopping_ssim = tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=PATIENCE, restore_best_weights=True)
+model_ssim.compile(optimizer="adam", loss=ssim_loss, metrics=[mse_metric])
+
+with mlflow.start_run(run_name="conv_autoencoder_ssim") as run_ssim:
+    mlflow.log_params({..., "loss": "ssim_loss (1 - SSIM)"})
+    history_ssim = model_ssim.fit(train_ds_xy, validation_data=val_ds_xy, epochs=EPOCHS, callbacks=[early_stopping_ssim], verbose=2)
+    epochs_trained_ssim = len(history_ssim.history["loss"])
+    mlflow.log_param("epochs_trained", epochs_trained_ssim)
+    for epoch in range(epochs_trained_ssim):
+        mlflow.log_metrics({...}, step=epoch)
+    run_id_ssim = run_ssim.info.run_id
+```
+
+---
+
+## 16. Algorithm B — Training curves (SSIM)
+
+Always runs. Loss (1 - SSIM) train/val + MSE (cross-metric) train/val.
+
+---
+
+## 17. Algorithm B — Reconstruction before / after training
+
+Always runs. Same layout as step 14, for the SSIM model.
+
+---
+
+## 18. Comparing the two algorithms
+
+*(Skipped if `RUN_FULL_COMPARISON=False` — no MSE model to compare.)*
+
+Both models reconstruct the same validation images; final summary with cross-metrics from both runs (`val_loss`/`val_ssim` for MSE, `val_loss`/`val_mse` for SSIM).
+
+---
+
+## 19. Anomaly score and threshold calibration
+
+Score = per-image MSE reconstruction error, threshold calibrated only on `val_ds`. Two threshold criteria in parallel: **percentile** (p95) and **mean + K·std** (K=3, "3-sigma" rule). The `models` dict adapts to `RUN_FULL_COMPARISON`:
+
+```python
+models = {"MSE": (model_mse, run_id_mse), "SSIM": (model_ssim, run_id_ssim)} if RUN_FULL_COMPARISON else {"SSIM": (model_ssim, run_id_ssim)}
+
+for name, (model, rid) in models.items():
+    val_scores = reconstruction_errors(val_ds, model)
+    test_good_scores = reconstruction_errors(test_good_ds, model)
+    test_defect_scores = np.concatenate([reconstruction_errors(ds, model) for ds in test_defect_ds.values()])
+
+    threshold = np.percentile(val_scores, THRESHOLD_PERCENTILE)
+    threshold_std = val_scores.mean() + K_STD * val_scores.std()
+    # ... recall/FP for both criteria, MLflow logging ...
+```
+
+All following render cells (histograms, percentile sweep) iterate over `models.keys()` — a single panel if `RUN_FULL_COMPARISON=False`, two otherwise.
+
+### Checking threshold generalization: `val` vs `test/good`
+
+If the two distributions differ markedly, the threshold calibrated on `val` doesn't generalize well to `test/good` — observed for MSE (35-40% FP instead of ~5%), not for SSIM.
+
+### Visual render — normal vs defect histograms
+
+One panel per algorithm present in `models`, with both thresholds (percentile and mean+K·std) overlaid.
+
+### Lowering the threshold increases recall
+
+Percentile sweep (50 to 99), recall and false positives against threshold, `threshold_sweep` stored for reuse in step 22 (no recomputation).
+
+**Reading it**: recall increases as the threshold is lowered, at the cost of more false positives — no "free" threshold. If one curve dominates the other, that algorithm offers a better intrinsic anomaly score.
+
+---
+
+## 21. Heatmaps & evaluation
+
+Goes down to pixel level: **error map** (heatmap) to localize the defect, then quantitative evaluation at two scales.
+
+### Per-pixel error map (heatmap)
+
+```python
+def error_heatmap(original, reconstruction):
+    return tf.reduce_mean(tf.square(original - reconstruction), axis=-1)
+```
+
+Render `original | reconstruction | heatmap | ground-truth mask`, one example per defect class. The MSE call is conditioned on `RUN_FULL_COMPARISON`; SSIM always shown.
+
+### Threshold-independent aggregate metrics (AUC-ROC, AUC-PR)
+
+- **AUC-ROC**: already seen in steps 19-20.
+- **AUC-PR**: more informative than AUC-ROC when the positive class is minority — **relevant especially at pixel level** (rare "defect" pixels, ~85-99% background, see study 3.11). A random classifier gets an AUC-PR close to the positive class prevalence — compare, don't read in absolute terms.
+
+```python
+auroc_image[name] = roc_auc_score(y_true_img, y_score_img)
+aucpr_image[name] = average_precision_score(y_true_img, y_score_img)
+# pixel level: same functions on concatenated heatmaps/masks (all pixels, all test images)
+auroc_pixel[name] = roc_auc_score(all_masks.flatten(), all_heatmaps.flatten())
+aucpr_pixel[name] = average_precision_score(all_masks.flatten(), all_heatmaps.flatten())
+```
+
+**Render — diagrams**: ROC and Precision-Recall curves (image level) side by side, one color per algorithm present in `models`.
+
+### Effect of moving to a pixel-level score: localization via IoU
+
+Image-level metrics answer "is the image defective?", not "where is the defect?". A **pixel threshold** is calibrated (percentile of `val_ds` pixels), the heatmap is binarized to get a **predicted segmentation mask**, compared to the real mask via **IoU**.
+
+```python
+def iou_score(pred_mask, true_mask):
+    intersection = np.logical_and(pred_mask, true_mask).sum()
+    union = np.logical_or(pred_mask, true_mask).sum()
+    return intersection / union if union > 0 else 1.0
+
+PIXEL_THRESHOLD_PERCENTILE = 99
+for name, (model, rid) in models.items():
+    val_heatmaps, _ = collect_pixel_arrays(model, val_ds)
+    pixel_threshold = np.percentile(val_heatmaps.flatten(), PIXEL_THRESHOLD_PERCENTILE)
+    # ... IoU per defective image, mean, MLflow logging ...
+```
+
+**Render**: predicted segmentation vs real mask, best/worst example, per algorithm.
+
+**Image-level vs pixel-level synthesis**: the two scales are complementary — a high score on one doesn't guarantee a high score on the other. To localize (not just detect), pixel-level IoU is the metric that matters.
+
+### Confusion matrix (at the calibrated threshold)
+
+At the percentile threshold (p95), an image is classified "defective" if its score exceeds the threshold — one matrix per algorithm present in `models`.
+
+### Failure analysis
+
+Missed defects (false negatives) and false alarms (false positives), up to 3 examples of each, per algorithm. **Reading it**: missed defects are typically the smallest/least contrasted (consistent with the pixel-level imbalance study, step 3.11 — `broken_small`). False alarms often come from atypical normal images, underrepresented in training.
+
+---
+
+## 22. Final decision: retained model, adjusted threshold, and per-image IoU
+
+**Retained model: SSIM algorithm.** Justification, from metrics already computed (no new training):
+- Step 19 (p95): comparable recall, but FP close to target for SSIM (~5-10%) vs 4 to 8x above target for MSE (35-40%).
+- Step 19 (`val` vs `test/good` generalization): SSIM's distribution transfers correctly; MSE's doesn't.
+- Step 21 (AUC-ROC/AUC-PR, IoU): consistent with the above.
+
+The rest of this section triggers **no training** and **no reconstruction recomputation** — reuses `scores["SSIM"]`, `pixel_data["SSIM"]` and `threshold_sweep["SSIM"]` already in memory.
+
+### Adjusting the calibration percentile
+
+Rather than the default p95 (arbitrary), the percentile that **maximizes Youden's J** (`recall - false positives`) is selected from the already-computed sweep:
+
+```python
+sweep = threshold_sweep["SSIM"]
+youden = sweep["recall"] - sweep["fpr"]
+best_idx = int(np.argmax(youden))
+FINAL_PERCENTILE = int(sweep["percentiles"][best_idx])
+final_threshold_image = np.percentile(scores["SSIM"]["val"], FINAL_PERCENTILE)
+```
+
+### Pixel segmentation threshold and per-image IoU (adjusted percentile)
+
+Same principle as step 21, with `FINAL_PERCENTILE` (instead of fixed p99), **for each defective image individually**:
+
+```python
+val_heatmaps_final, _ = collect_pixel_arrays(model_ssim, val_ds)  # only new forward pass in this section
+pixel_threshold_final = np.percentile(val_heatmaps_final.flatten(), FINAL_PERCENTILE)
+all_heatmaps_final, all_masks_final = pixel_data["SSIM"]  # reused as-is
+
+iou_rows = []
+for i, (label, heatmap, mask) in enumerate(zip(image_labels, all_heatmaps_final, all_masks_final)):
+    if mask.sum() == 0:
+        continue
+    pred_mask = (heatmap > pixel_threshold_final).astype(np.uint8)
+    iou_rows.append({"index_global": i, "defect_class": label, "iou": iou_score(pred_mask, mask)})
+```
+
+Render: full table (class, index, IoU) for all defective images, per-class + global means, scatter plot by class. **Reading it**: the spread of IoU by defect class reflects the pixel-level imbalance study (step 3.11) — `broken_small` tends to have lower IoU (smaller area, more sensitive to a slight mask misalignment).
+
+---
+
+## 23. Next step
+
+The SSIM model and adjusted threshold (Youden) are a solid starting point, not a final value:
+- Validate the Youden percentile on a larger validation set or via k-fold.
+- Adjust the percentile based on the actual business cost of FP vs FN.
+- Morphological post-processing (erosion/dilation, small-component filtering) on the predicted mask to improve IoU without changing the model.
+- In production, only retrain SSIM (`RUN_FULL_COMPARISON=False`) — the full comparison only needs replaying after a dataset/architecture change.
+
+---
+
+## 24. Overall processing time
+
+Timer set in the very first cell of the notebook (`_notebook_start_time = time.time()`), displayed here:
+
+```python
+_total_elapsed = time.time() - _notebook_start_time
+print(f"Total notebook execution time: {_total_elapsed:.1f} s  ({_total_elapsed/60:.1f} min)")
+```
+
+A local timer is also set around step 22 (calibration + per-image IoU), displayed separately — on this dataset, this section typically takes under a second (no significant new forward pass, everything reused). The main gain from `RUN_FULL_COMPARISON=False` comes from training (one model instead of two): ~35% less total time observed on this dataset.
