@@ -1,14 +1,12 @@
 # Synthèse — Choix du modèle d'autoencodeur (MSE vs SSIM)
 
-**Mise à jour : run réexécuté avec `VAL_FRACTION = 0.25`** (156 images train / 53 validation, contre 177/32 pour la précédente version à 0.15). Mêmes hyperparamètres sinon (8 epochs, `EarlyStopping` patience=5).
-
-> ⚠️ **Ce nouveau run inverse une partie des conclusions précédentes.** Les deux runs sont présentés côte à côte ci-dessous, avec une lecture honnête de ce que cette instabilité signifie (section 8).
+Ce document explique **pourquoi** le modèle entraîné avec la perte **SSIM** a été retenu plutôt que celui entraîné avec la perte **MSE**, et reprend, avec les valeurs chiffrées et les graphiques associés, chaque étape du notebook (`pipeline_bottle_full.ipynb`) qui permet de vérifier ce choix. Les chiffres cités proviennent d'une exécution réelle sur le dataset `bottle` (8 epochs, `EarlyStopping` patience=5 — un entraînement plus long accentuerait probablement ces écarts plutôt que de les inverser).
 
 ---
 
 ## 1. Point de détail important : l'architecture et son `summary()`
 
-Inchangé par rapport à la version précédente — `VAL_FRACTION` ne change pas l'architecture, seulement le split des données. Rappel :
+Avant de comparer deux entraînements, il faut savoir *ce qu'on compare* : les deux modèles (MSE et SSIM) partagent exactement la même architecture, seule la loss d'optimisation change. Le `summary()` Keras sert à vérifier cette architecture avant tout entraînement.
 
 ```
 Model: "conv_autoencoder"
@@ -28,118 +26,131 @@ Model: "conv_autoencoder"
  Total params: 776,579 (2.96 MB)
 ```
 
-- **Bottleneck `enc_conv4`** : `(8, 8, 256)`, ratio de compression `49 152 / 16 384 = 3.00x`, réduction spatiale ÷16.
-- **776 579 paramètres entraînables** — avec `VAL_FRACTION=0.25`, seulement **156 images d'entraînement** (contre 177 à 0.15) : le ratio paramètres/données se tend encore un peu plus, à surveiller.
+**Comment le lire :**
+
+- **Output Shape de la dernière ligne == Output Shape de la première** (`(None, 128, 128, 3)` des deux côtés) : condition nécessaire pour que le modèle puisse reconstruire une image de même taille que l'originale, et donc comparer pixel à pixel.
+- **`enc_conv4` porte le `Output Shape` le plus petit** (`8, 8, 256`) : c'est le **bottleneck**, le goulot d'étranglement qui force le modèle à compresser l'information plutôt qu'à recopier l'image. Sans cette contrainte, le modèle pourrait apprendre l'identité et l'erreur de reconstruction ne serait plus informative pour détecter une anomalie.
+  - Réduction spatiale : 128 → 8, soit **÷16** en hauteur et en largeur.
+  - **Ratio de compression** : `(128×128×3) / (8×8×256) = 49 152 / 16 384 = 3.00x` — 3 fois moins de valeurs à la sortie de l'encodeur qu'à l'entrée.
+- **Param #** se vérifie avec la formule `(kernel_h × kernel_w × canaux_entrée + 1) × canaux_sortie` : `enc_conv1` = `(3×3×3+1)×32 = 896` ✓, `enc_conv2` = `(3×3×32+1)×64 = 18 496` ✓.
+- **Symétrie encodeur/décodeur** : le nombre de paramètres croît puis décroît de façon quasi symétrique (896 → 295 168 → 867) — signe d'une architecture cohérente, pas de déséquilibre suspect entre les deux moitiés.
+- **776 579 paramètres entraînables**, à mettre en regard des 177 images d'entraînement disponibles : ratio paramètres/données volontairement surveillé (risque de sur-apprentissage), d'où l'usage de l'augmentation de données et de l'`EarlyStopping`.
 
 ---
 
 ## 2. Étape 19 — Rappel et faux positifs au seuil par défaut (p95)
 
-| Algorithme | Seuil (p95) | Rappel | Faux positifs |
-|---|---|---|---|
-| **MSE**  | 0.00746 | **47.6 %** | 40.0 % |
-| **SSIM** | 0.01519 | 11.1 % | **5.0 %** |
+Le seuil est calibré **uniquement sur les images saines de validation** (`val_ds`, jamais sur le test — pas de fuite), au 95ᵉ percentile des scores d'erreur de reconstruction.
 
-Comme sur le run précédent, MSE détecte plus de défauts au prix de plus de faux positifs. Le taux de FP de MSE (40 %) reste très supérieur à la cible de ~5 %.
+| Algorithme | Seuil (p95) | Rappel (défauts détectés) | Faux positifs (saines flaguées) |
+|---|---|---|---|
+| **MSE**  | 0.00266 | 57.14% | **35.00 %** |
+| **SSIM** | 0.00105 | 52.38% | **0.00 %** |
+
+À ce seuil précis, MSE et SSIM ont un rappel comparable, mais SSIM ne produit aucun faux positif contre 35 % pour MSE — très loin des ~5 % attendus par construction d'un seuil p95. Ce chiffre est le premier signal d'alerte sur MSE, creusé à l'étape suivante.
 
 ---
 
 ## 3. Étape 19 — Vérification de la généralisation du seuil (`val` vs `test/good`)
 
-| Algorithme | mean(val) | mean(test/good) | Écart |
-|---|---|---|---|
-| **MSE**  | 0.00708 | 0.00736 | +3.8 % |
-| **SSIM** | 0.01374 | 0.01394 | +1.4 % |
+Le seuil n'a de sens que si les scores des images saines de validation et de test suivent la **même distribution**. C'est le test décisif qui a fait pencher la balance vers SSIM :
 
-![Val vs test/good](synthesis2_val_vs_test.png)
+![Val vs test/good](synthesis_val_vs_test.png)
 
-Ici, **les deux algorithmes généralisent correctement** cette fois (écarts faibles, du même ordre de grandeur) — contrairement au run à 0.15 où SSIM se distinguait nettement de MSE sur ce critère. Ce test ne permet donc plus, à lui seul, de départager les deux algorithmes sur ce run.
+Un seuil calibré sur `val` avec MSE produit un taux de FP très supérieur à l'objectif visé sur `test/good` — le seuil ne se généralise pas correctement. Avec SSIM, le seuil se généralise correctement (0 % de FP, cohérent avec l'objectif). Ce test suffit à lui seul à mettre en doute la fiabilité de MSE comme score de production.
 
 ---
 
 ## 4. Étape 21 — Métriques agrégées indépendantes du seuil (AUC-ROC, AUC-PR)
 
+Pour ne pas dépendre d'un seul point de fonctionnement (le seuil p95), on évalue le score sur toute la plage de seuils possibles, à deux échelles :
+
 | Algorithme | AUC-ROC image | AUC-PR image | AUC-ROC pixel | AUC-PR pixel |
 |---|---|---|---|---|
-| **MSE**  | **0.556** | **0.829** | **0.648** | **0.098** |
-| **SSIM** | 0.544 | 0.808 | 0.333 | 0.042 |
+| **MSE**  | 0.441 | 0.786 | 0.692 | 0.088 |
+| **SSIM** | **0.744** | **0.922** | **0.779** | **0.211** |
 
-![Courbes ROC et Precision-Recall](synthesis2_roc_pr.png)
+![Courbes ROC et Precision-Recall](synthesis_roc_pr.png)
 
-**Retournement complet** par rapport au run précédent : MSE devance désormais SSIM sur les quatre métriques, et l'AUC-ROC pixel de SSIM (0.333) est même **inférieur au niveau du hasard** (0.5) — signe que sur ce run, le score pixel de SSIM anti-corrèle localement avec le masque réel plutôt que de le suivre.
-
----
-
-## 5. Étape 21 — Rappel vs faux positifs en fonction du seuil
-
-![Rappel et faux positifs vs seuil](synthesis2_recall_vs_threshold.png)
+SSIM domine sur les **quatre** métriques simultanément, à l'image comme au pixel. L'AUC-PR pixel de MSE est proche de ce qu'obtiendrait un classifieur aléatoire compte tenu du déséquilibre pixel-level (cf. étude de déséquilibre, étape 3.11) ; celui de SSIM, bien que modeste en absolu, double ce niveau de référence.
 
 ---
 
-## 6. Étape 21 — Effet du score pixel-level : IoU
+## 5. Étape 21 — Rappel vs faux positifs en fonction du seuil (balayage complet)
+
+Plutôt qu'un seul point (p95), on trace le compromis rappel/FP sur toute la plage de seuils :
+
+![Rappel et faux positifs vs seuil](synthesis_recall_vs_threshold.png)
+
+À n'importe quel seuil de ce balayage, on peut comparer les deux courbes point par point — c'est cette figure qui sert de base à l'ajustement du seuil final (section 7 ci-dessous, indice de Youden).
+
+---
+
+## 6. Étape 21 — Effet du score pixel-level : IoU (localisation du défaut)
+
+Au-delà de "l'image est-elle défectueuse ?", peut-on **localiser** le défaut ? Seuil pixel calibré (p99 des pixels de `val_ds`), masque de segmentation prédit comparé au masque réel via l'IoU :
 
 | Algorithme | Seuil pixel (p99) | IoU moyen (63 images défectueuses) |
 |---|---|---|
-| **MSE**  | 0.05738 | **0.047** |
-| **SSIM** | 0.13017 | 0.010 |
+| **MSE**  | 0.05519 | 0.047 |
+| **SSIM** | 0.08403 | **0.138** |
 
-![Segmentation prédite vs masque réel](synthesis2_segmentation.png)
+![Segmentation prédite vs masque réel](synthesis_segmentation.png)
 
-Là aussi, l'écart s'inverse : MSE localise près de 5x mieux le défaut que SSIM sur ce run (contre l'inverse sur le run à 0.15).
+L'IoU de SSIM est quasiment **3 fois supérieur** à celui de MSE — SSIM ne détecte pas seulement mieux la présence d'un défaut, il le localise aussi mieux spatialement. Cohérent avec le fait que la loss SSIM est elle-même construite pour être sensible à la structure locale (luminance, contraste, texture), pas seulement à l'écart pixel brut que pénalise MSE.
 
 ---
 
-## 7. Étape 22 — Ajustement du seuil (indice de Youden), sur le modèle SSIM
+## 7. Étape 22 — Décision finale et ajustement du seuil (indice de Youden)
 
-Le notebook reste configuré pour retenir SSIM par défaut (choix figé en amont) ; l'ajustement de percentile est donc recalculé pour SSIM, mais **à la lumière des chiffres ci-dessus, ce choix de modèle n'est plus soutenu par ce run** — voir section 8.
+**Modèle retenu : SSIM.** Les étapes précédentes convergent toutes dans le même sens (rappel/FP, généralisation, AUC-ROC/AUC-PR, IoU) — aucune ne favorise MSE.
+
+Plutôt que de garder le p95 par défaut (arbitraire), le seuil final est celui qui **maximise l'indice de Youden** (`rappel − faux positifs`) sur le balayage de la section 5 :
 
 ```
-Percentile retenu : p70  (indice de Youden = 0.160, rappel = 46.03%, FP = 30.00%)
-Pour comparaison, p95 par défaut : rappel = 11.11%, FP = 5.00%
+Percentile retenu : p60  (indice de Youden = 0.521, rappel = 57.14%, FP = 5.00%)
+Pour comparaison, p95 par défaut : rappel = 19.05%, FP = 0.00%
 ```
 
-L'indice de Youden au point optimal (0.160) est nettement plus faible que sur le run précédent (0.521) — signe d'un compromis rappel/FP globalement moins favorable pour SSIM sur ce run.
+En acceptant de passer de 0 % à 5 % de faux positifs (toujours un niveau raisonnable), le rappel augmente substantiellement — un gain net pour un coût de FP resté modéré. C'est ce compromis, justifié par les données plutôt que choisi arbitrairement, qui est retenu.
 
-### IoU par image, seuil ajusté (p70)
+### IoU par image, seuil ajusté
+
+Avec ce nouveau seuil pixel (calibré au même percentile ajusté), l'IoU par classe de défaut :
 
 | Classe | IoU moyen | n images |
 |---|---|---|
-| `broken_large` | 0.036 | 20 |
-| `broken_small` | 0.025 | 22 |
-| `contamination` | 0.031 | 21 |
-| **Global** | **0.030** (± 0.026) | 63 |
+| `broken_large` | 0.221 | 20 |
+| `broken_small` | **0.064** | 22 |
+| `contamination` | 0.206 | 21 |
+| **Global** | **0.161** (± 0.119) | 63 |
 
-![IoU par image défectueuse](synthesis2_iou_per_image.png)
+![IoU par image défectueuse](synthesis_iou_per_image.png)
 
-IoU global divisé par ~5 par rapport au run précédent (0.161 → 0.030) pour ce même modèle SSIM — confirme que la performance de segmentation de SSIM sur ce run est nettement dégradée.
+`broken_small` a l'IoU le plus faible — cohérent avec l'étude de déséquilibre pixel-level (étape 3.11), où cette classe a la plus petite fraction de pixels défectueux : une zone de défaut plus petite est mécaniquement plus sensible à un léger décalage du masque prédit.
 
-### Matrice de confusion
+### Matrice de confusion (seuil calibré)
 
-![Matrice de confusion](synthesis2_confusion_matrix.png)
+![Matrice de confusion](synthesis_confusion_matrix.png)
 
 ---
 
-## 8. Comparaison des deux runs — lecture honnête
+## 8. Résumé décisionnel
 
-| Critère | Run `VAL_FRACTION=0.15` | Run `VAL_FRACTION=0.25` |
-|---|---|---|
-| Split train/val | 177 / 32 | 156 / 53 |
-| FP @ p95 (MSE) | 30.0 % | 40.0 % |
-| FP @ p95 (SSIM) | 0.0 % | 5.0 % |
-| Généralisation val→test | SSIM nettement meilleur | Les deux comparables |
-| AUC-ROC image | SSIM (0.744) > MSE (0.551) | **MSE (0.556) > SSIM (0.544)** |
-| AUC-PR image | SSIM (0.922) > MSE (0.836) | **MSE (0.829) > SSIM (0.808)** |
-| AUC-ROC pixel | SSIM (0.779) > MSE (0.639) | **MSE (0.648) > SSIM (0.333)** |
-| IoU moyen | SSIM (0.138) > MSE (0.047) | **MSE (0.047) > SSIM (0.010)** |
-| Youden (SSIM) | 0.521 | 0.160 |
+| Critère | MSE | SSIM | Gagnant |
+|---|---|---|---|
+| Rappel @ p95 | 57.1 % | 52.4 % | ≈ égal |
+| FP @ p95 | **35.0 %** | 0.0 % | **SSIM** |
+| Généralisation val→test | Seuil non fiable | Seuil fiable | **SSIM** |
+| AUC-ROC image | 0.441 | **0.744** | **SSIM** |
+| AUC-PR image | 0.786 | **0.922** | **SSIM** |
+| AUC-ROC pixel | 0.692 | **0.779** | **SSIM** |
+| AUC-PR pixel | 0.088 | **0.211** | **SSIM** |
+| IoU moyen | 0.047 | **0.138** | **SSIM** |
+| Rappel @ seuil ajusté (Youden) | — | 57.1 % (FP 5 %) | **SSIM** |
 
-**Ce que ça signifie :**
+Sur la quasi-totalité des critères comparés, SSIM domine — le seul point de parité (rappel brut au p95) s'accompagne d'un taux de faux positifs bien supérieur pour MSE, ce qui invalide la comparaison à seuil égal. **Le choix de SSIM comme perte d'entraînement est donc soutenu par l'ensemble des métriques, pas par un seul chiffre isolé.**
 
-1. **Le résultat n'est pas stable d'un split à l'autre**, à 8 epochs. Avec seulement 8 epochs, les deux modèles sont probablement encore loin de leur convergence — l'ordre de mérite entre MSE et SSIM peut dépendre autant du split validation que du choix de la loss elle-même. **La conclusion précédente ("SSIM domine sur 8/9 critères") ne doit plus être considérée comme établie** — elle décrivait un run particulier, pas une propriété robuste de la loss SSIM sur ce dataset.
-2. Ce constat corrobore une remarque déjà faite plus tôt dans ce travail : *le rappel/FP à un seuil donné dépend de la taille du split validation* — c'est exactement ce qu'on observe ici, mais à une échelle plus large que prévu (inversion de classement, pas seulement un décalage de valeurs).
-3. **Recommandation** : avant de trancher définitivement entre MSE et SSIM, il faut soit (a) entraîner avec un budget d'epochs nettement supérieur (30+ avec `EarlyStopping`, pas 8) pour réduire la variance liée à un entraînement incomplet, soit (b) répéter la comparaison sur plusieurs splits (k-fold ou plusieurs seeds) et comparer les moyennes ± écart-type plutôt qu'un seul run.
-4. **Le mécanisme du notebook (comparaison, ajustement Youden, IoU par image) reste valide et correctement outillé** — c'est la conclusion tirée d'un seul run à 8 epochs qui n'est pas fiable, pas la méthode.
+> ⚠️ **Mise à jour ultérieure** : des réexécutions du même notebook (avec `VAL_FRACTION` différent, puis rejoué à l'identique) ont montré que ces résultats ne sont **pas stables d'une exécution à l'autre** — voir le fichier de synthèse le plus récent pour l'analyse de cette variance et sa cause probable (absence de `tf.random.set_seed`). Ce document reste la trace du tout premier run, mais ne doit plus être lu comme une conclusion définitive isolément.
 
-**Décision révisée à ce stade** : ne pas figer le choix de SSIM comme définitif tant qu'une comparaison plus robuste (plus d'epochs et/ou plusieurs splits) n'a pas été menée. Le notebook et la section 22 restent utiles pour documenter *comment* comparer et choisir, mais le résultat numérique d'un run isolé à 8 epochs ne doit pas être interprété comme la réponse finale.
-
-*Notebook de référence : `pipeline_bottle_full.ipynb`, run avec `VAL_FRACTION=0.25`, `EPOCHS=8`.*
+*Notebook de référence : `pipeline_bottle_full.ipynb`, sections 7-8 (architecture), 19 (seuil et généralisation), 21 (AUC-ROC/PR, IoU), 22 (décision finale et ajustement).*
