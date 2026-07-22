@@ -31,7 +31,7 @@ MLflow a besoin d'un backend store pour persister les runs, paramètres et métr
 
 ```bash
 # Lancer le serveur de tracking MLflow avec SQLite comme backend store
-mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
+mlflow server --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
 ```
 
 Dans le notebook, pointer le tracking URI vers ce serveur (ou directement vers le fichier SQLite si le serveur n'est pas lancé) :
@@ -39,7 +39,7 @@ Dans le notebook, pointer le tracking URI vers ce serveur (ou directement vers l
 ```python
 import mlflow
 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")  # ou "http://127.0.0.1:5000" si le serveur tourne
+mlflow.set_tracking_uri("sqlite:///mlflow/mlflow.db")  # ou "http://127.0.0.1:5000" si le serveur tourne
 mlflow.set_experiment("maintenance_predictive")
 ```
 
@@ -657,7 +657,7 @@ Prérequis : MLflow installé et backend SQLite configuré (voir étape 0). En c
 ```python
 import mlflow
 
-mlflow.set_tracking_uri("sqlite:///mlflow.db")  # ou "http://127.0.0.1:5000" si le serveur tourne
+mlflow.set_tracking_uri("sqlite:///mlflow/mlflow.db")  # ou "http://127.0.0.1:5000" si le serveur tourne
 mlflow.set_experiment("maintenance_predictive")
 ```
 
@@ -760,7 +760,7 @@ runs_df[["run_id", "tags.mlflow.runName", "metrics.pr_auc", "metrics.roc_auc", "
 ### 12.7 Visualiser dans l'interface MLflow
 
 ```bash
-uv run mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
+uv run mlflow server --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
 ```
 
 Puis ouvrir `http://127.0.0.1:5000` : chaque run apparaît avec ses paramètres, métriques et le modèle téléchargeable, groupés sous l'expérience `maintenance_predictive`.
