@@ -1,0 +1,29 @@
+ml:
+  hyperparameters:
+    n_estimators: 135
+    max_depth: 3
+    learning_rate: 0.13990398785836217
+    subsample: 0.7521267579028308
+    colsample_bytree: 0.7737425087025646
+    min_child_weight: 5
+    reg_lambda: 0.0011859620981482107
+    reg_alpha: 0.26837193414400196
+    scale_pos_weight: 2.127469612447374
+  baseline_hyperparameters:
+    n_estimators: 300
+    max_depth: 5
+    learning_rate: 0.1
+    subsample: 0.9
+    colsample_bytree: 0.9
+    min_child_weight: 1
+    reg_lambda: 1.0
+    reg_alpha: 0.0
+  n_jobs: -1
+  model_version: v1.0.0
+
+dl:
+  epochs: 30
+  patience: 5
+  loss: ssim
+  base_filters: 32
+  optimizer: adam

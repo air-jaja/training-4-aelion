@@ -1,0 +1,9 @@
+ml:
+  threshold_percentile: 95
+  metrics:
+    - pr_auc
+    - roc_auc
+
+dl:
+  threshold_percentile: 95
+  pixel_threshold_percentile: 99

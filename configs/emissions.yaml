@@ -1,0 +1,4 @@
+common:
+  carbon_intensity_g_co2e_kwh: 56.0  # mix électrique français (ADEME/RTE)
+  measure_power_secs: 1
+  emissions_filename: emissions.csv

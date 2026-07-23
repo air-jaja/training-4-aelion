@@ -1,0 +1,39 @@
+ml:
+  gold_dataset_filename: gold_dataset.parquet
+  horizon: label_failure_next_24h
+  exclude_columns:
+    - machine_id_std
+    - window_start
+    - window_end
+    - future_incident_count_6h
+    - label_failure_next_6h
+    - future_incident_count_12h
+    - label_failure_next_12h
+    - future_incident_count_24h
+    - label_failure_next_24h
+    - future_incident_count_48h
+    - label_failure_next_48h
+    - incident_count_1h
+    - incident_max_severity_1h
+    - incident_count_prev_24h
+    - incident_max_severity_prev_24h
+    - incident_count_prev_7d
+    - hours_since_last_incident
+    - type_surchauffe_count_prev_24h
+    - type_baisse_pression_count_prev_24h
+    - type_vibration_count_prev_24h
+    - type_bruit_mecanique_count_prev_24h
+    - type_surconsommation_count_prev_24h
+    - type_blocage_mecanique_count_prev_24h
+    - type_alarme_capteur_count_prev_24h
+    - type_arret_urgence_count_prev_24h
+    - type_defaut_qualite_count_prev_24h
+    - days_since_last_maintenance
+    - maintenance_count_prev_30d
+    - split_set
+
+dl:
+  bottle_dirname: bottle
+  img_size: 128
+  val_fraction: 0.15
+  batch_size: 16
