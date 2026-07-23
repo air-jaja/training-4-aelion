@@ -16,6 +16,6 @@ wheels/
 *.lock
 /graphs/**/*.png
 /artifacts/**/*.png
+/artifacts/ingestions/telemetry/**/*.csv
 /artifacts/ingestions/incidents/**/*.csv
 /.vscode/*
-/artifacts/ingestions/telemetry/**/*.csv
