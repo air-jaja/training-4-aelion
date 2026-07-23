@@ -186,7 +186,7 @@ Remove-Item .\mlflow.db
 Puis relancer le serveur :
 
 ```bash
-uv run mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
+uv run mlflow server --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
 ```
 
 ---
@@ -207,7 +207,7 @@ uv add "sqlalchemy<2"
 uv run mlflow --version
 
 # Lancement du serveur de tracking
-uv run mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
+uv run mlflow server --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
 ```
 
 Si le projet reste en **Python 3.14**, ajouter également le contournement protobuf :
