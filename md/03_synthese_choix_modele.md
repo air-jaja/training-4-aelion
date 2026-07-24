@@ -56,7 +56,7 @@ Cette fois, MSE et SSIM détectent un rappel comparable (47.6 % vs 41.3 %), mais
 | **MSE**  | 0.00380 | 0.00410 | +7.8 % |
 | **SSIM** | 0.00610 | 0.00616 | +1.0 % |
 
-![Val vs test/good](fugures/synthesis3_val_vs_test.png)
+![Val vs test/good](figures/synthesis3_val_vs_test.png)
 
 SSIM généralise mieux que MSE (écart +1.0 % contre +7.8 %) — comme sur le run A, à un degré moindre.
 
