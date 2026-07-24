@@ -49,6 +49,9 @@ dev = [
     "nbconvert>=7.16",
     "ruff>=0.5",
 ]
+dependencies = [
+    "pyyaml>=6.0.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
