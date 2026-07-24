@@ -134,10 +134,9 @@ def run_context_preprocessing():
 
 def run_context_ml():
     """Entraîne et évalue le modèle ML (baseline + modèle retenu) sur le test set."""
-    from sklearn.metrics import average_precision_score, roc_auc_score
-
     from indusense.ml.data import load_gold_dataset, temporal_split
     from indusense.ml.train import build_baseline_model, train_final_model, save_model
+    from indusense.ml.evaluate import calibrate_threshold, evaluate_at_threshold
     from indusense.common.modelcard import make_model_id
     from indusense.common.config import load_config
 
@@ -146,13 +145,14 @@ def run_context_ml():
 
     baseline = build_baseline_model()
     baseline.fit(X_train, y_train)
-    prauc_baseline = average_precision_score(y_val, baseline.predict_proba(X_val)[:, 1])
-    print(f"  Baseline — PR-AUC (val) = {prauc_baseline:.4f}")
+    threshold_baseline = calibrate_threshold(baseline, X_val, y_val)
+    metrics_baseline = evaluate_at_threshold(y_val, threshold_baseline, model=baseline, X=X_val)
+    print(f"  Baseline — PR-AUC (val) = {metrics_baseline['prauc']:.4f}")
 
     final_model = train_final_model(X_train, y_train, X_val, y_val)
-    proba_test = final_model.predict_proba(X_test)[:, 1]
-    print(f"  Modèle final — PR-AUC (test) = {average_precision_score(y_test, proba_test):.4f}  "
-          f"AUC (test) = {roc_auc_score(y_test, proba_test):.4f}")
+    threshold = calibrate_threshold(final_model, X_val, y_val)  # même modèle ici, calibration cohérente pour ce contexte rapide
+    metrics_test = evaluate_at_threshold(y_test, threshold, model=final_model, X=X_test)
+    print(f"  Modèle final — PR-AUC (test) = {metrics_test['prauc']:.4f}  AUC (test) = {metrics_test['auroc']:.4f}")
 
     cfg = load_config("train", domain="ml")
     model_id = make_model_id("predictive-maintenance-xgboost-24h", cfg["hyperparameters"])
@@ -238,10 +238,9 @@ def run_context_emissions():
 
 def run_context_modelcard():
     """Génère la model card du modèle ML retenu (entraînement + métriques + rendu Jinja2)."""
-    from sklearn.metrics import average_precision_score, roc_auc_score
-
     from indusense.ml.data import load_gold_dataset, temporal_split
     from indusense.ml.train import build_tuned_model, train_final_model
+    from indusense.ml.evaluate import calibrate_threshold, evaluate_at_threshold
     from indusense.common.config import load_config
     from indusense.common.modelcard import make_model_id, render_model_card
 
@@ -250,13 +249,10 @@ def run_context_modelcard():
 
     calib_model = build_tuned_model()
     calib_model.fit(X_train, y_train)
-    import numpy as np
-    threshold = np.percentile(calib_model.predict_proba(X_val)[:, 1][y_val == 0], 95)
+    threshold = calibrate_threshold(calib_model, X_val, y_val)
 
     final_model = train_final_model(X_train, y_train, X_val, y_val)
-    proba_test = final_model.predict_proba(X_test)[:, 1]
-    prauc_test = average_precision_score(y_test, proba_test)
-    auc_test = roc_auc_score(y_test, proba_test)
+    metrics_test = evaluate_at_threshold(y_test, threshold, model=final_model, X=X_test)
 
     cfg = load_config("train", domain="ml")
     model_id = make_model_id("predictive-maintenance-xgboost-24h", cfg["hyperparameters"])
@@ -264,7 +260,7 @@ def run_context_modelcard():
     context = {
         "model_id": model_id,
         "model_summary": "Prédiction de panne machine à 24h (XGBoost) — voir configs/ pour les réglages.",
-        "results": f"PR-AUC (test) = {prauc_test:.4f} ; AUC (test) = {auc_test:.4f} ; seuil = {threshold:.4f}",
+        "results": f"PR-AUC (test) = {metrics_test['prauc']:.4f} ; AUC (test) = {metrics_test['auroc']:.4f} ; seuil = {threshold:.4f}",
     }
     path = render_model_card(context, model_id)
     print(f"  Model card générée : {path}")
