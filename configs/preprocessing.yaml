@@ -33,6 +33,7 @@ ml:
     - split_set
 
 dl:
+  data_dir: data                # relatif à la racine du projet — convention déjà établie (data/bottle, Git LFS)
   bottle_dirname: bottle
   img_size: 128
   val_fraction: 0.15

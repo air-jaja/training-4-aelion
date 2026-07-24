@@ -80,10 +80,21 @@ def load_config(activity: str, domain: Optional[str] = None) -> dict[str, Any]:
     return _apply_env_overrides(section, activity, domain)
 
 
+def _coerce(raw: str, reference: Any) -> Any:
+    """Convertit la valeur d'environnement (toujours une chaîne) vers le type de la valeur YAML d'origine."""
+    if isinstance(reference, bool):
+        return raw.lower() in ("1", "true", "yes", "on")
+    if isinstance(reference, int):
+        return int(raw)
+    if isinstance(reference, float):
+        return float(raw)
+    return raw
+
+
 def _apply_env_overrides(section: dict[str, Any], activity: str, domain: Optional[str]) -> dict[str, Any]:
     prefix = f"INDUSENSE_{activity.upper()}_{(domain or '').upper()}_".replace("__", "_")
     for key in list(section.keys()):
         env_key = f"{prefix}{key.upper()}"
         if env_key in os.environ:
-            section[key] = os.environ[env_key]
+            section[key] = _coerce(os.environ[env_key], section[key])
     return section
