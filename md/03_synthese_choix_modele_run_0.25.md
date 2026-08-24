@@ -51,7 +51,7 @@ Comme sur le run précédent, MSE détecte plus de défauts au prix de plus de f
 | **MSE**  | 0.00708 | 0.00736 | +3.8 % |
 | **SSIM** | 0.01374 | 0.01394 | +1.4 % |
 
-![Val vs test/good](synthesis2_val_vs_test.png)
+![Val vs test/good](figures/synthesis2_val_vs_test.png)
 
 Ici, **les deux algorithmes généralisent correctement** cette fois (écarts faibles, du même ordre de grandeur) — contrairement au run à 0.15 où SSIM se distinguait nettement de MSE sur ce critère. Ce test ne permet donc plus, à lui seul, de départager les deux algorithmes sur ce run.
 
@@ -64,7 +64,7 @@ Ici, **les deux algorithmes généralisent correctement** cette fois (écarts fa
 | **MSE**  | **0.556** | **0.829** | **0.648** | **0.098** |
 | **SSIM** | 0.544 | 0.808 | 0.333 | 0.042 |
 
-![Courbes ROC et Precision-Recall](synthesis2_roc_pr.png)
+![Courbes ROC et Precision-Recall](figures/synthesis2_roc_pr.png)
 
 **Retournement complet** par rapport au run précédent : MSE devance désormais SSIM sur les quatre métriques, et l'AUC-ROC pixel de SSIM (0.333) est même **inférieur au niveau du hasard** (0.5) — signe que sur ce run, le score pixel de SSIM anti-corrèle localement avec le masque réel plutôt que de le suivre.
 
@@ -72,7 +72,7 @@ Ici, **les deux algorithmes généralisent correctement** cette fois (écarts fa
 
 ## 5. Étape 21 — Rappel vs faux positifs en fonction du seuil
 
-![Rappel et faux positifs vs seuil](synthesis2_recall_vs_threshold.png)
+![Rappel et faux positifs vs seuil](figures/synthesis2_recall_vs_threshold.png)
 
 ---
 
@@ -83,7 +83,7 @@ Ici, **les deux algorithmes généralisent correctement** cette fois (écarts fa
 | **MSE**  | 0.05738 | **0.047** |
 | **SSIM** | 0.13017 | 0.010 |
 
-![Segmentation prédite vs masque réel](synthesis2_segmentation.png)
+![Segmentation prédite vs masque réel](figures/synthesis2_segmentation.png)
 
 Là aussi, l'écart s'inverse : MSE localise près de 5x mieux le défaut que SSIM sur ce run (contre l'inverse sur le run à 0.15).
 
@@ -109,13 +109,13 @@ L'indice de Youden au point optimal (0.160) est nettement plus faible que sur le
 | `contamination` | 0.031 | 21 |
 | **Global** | **0.030** (± 0.026) | 63 |
 
-![IoU par image défectueuse](synthesis2_iou_per_image.png)
+![IoU par image défectueuse](figures/synthesis2_iou_per_image.png)
 
 IoU global divisé par ~5 par rapport au run précédent (0.161 → 0.030) pour ce même modèle SSIM — confirme que la performance de segmentation de SSIM sur ce run est nettement dégradée.
 
 ### Matrice de confusion
 
-![Matrice de confusion](synthesis2_confusion_matrix.png)
+![Matrice de confusion](figures/synthesis2_confusion_matrix.png)
 
 ---
 

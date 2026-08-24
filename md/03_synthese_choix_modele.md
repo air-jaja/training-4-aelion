@@ -56,7 +56,7 @@ Cette fois, MSE et SSIM détectent un rappel comparable (47.6 % vs 41.3 %), mais
 | **MSE**  | 0.00380 | 0.00410 | +7.8 % |
 | **SSIM** | 0.00610 | 0.00616 | +1.0 % |
 
-![Val vs test/good](synthesis3_val_vs_test.png)
+![Val vs test/good](figures/synthesis3_val_vs_test.png)
 
 SSIM généralise mieux que MSE (écart +1.0 % contre +7.8 %) — comme sur le run A, à un degré moindre.
 
@@ -69,7 +69,7 @@ SSIM généralise mieux que MSE (écart +1.0 % contre +7.8 %) — comme sur le r
 | **MSE**  | 0.570 | 0.840 | **0.645** | **0.101** |
 | **SSIM** | **0.766** | **0.924** | 0.485 | 0.071 |
 
-![Courbes ROC et Precision-Recall](synthesis3_roc_pr.png)
+![Courbes ROC et Precision-Recall](figures/synthesis3_roc_pr.png)
 
 **Résultat mixte, différent des deux runs précédents** : SSIM domine au niveau image (comme le run A), mais MSE domine au niveau pixel (comme le run B), et l'AUC-ROC pixel de SSIM (0.485) est proche du hasard.
 
@@ -102,7 +102,7 @@ IoU par image, seuil ajusté (p86) :
 | `contamination` | 0.083 | 21 |
 | **Global** | **0.076** (± 0.071) | 63 |
 
-![IoU par image défectueuse](synthesis3_iou_per_image.png)
+![IoU par image défectueuse](figures/synthesis3_iou_per_image.png)
 
 ---
 
